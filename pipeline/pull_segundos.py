@@ -110,6 +110,24 @@ WHERE la.credit_hub IS TRUE
 
 # is_recurrence lo marca el motor de riesgo: es la senal oficial de "esta
 # solicitud es un segundo credito", no una inferencia nuestra.
+#
+# OJO CON LA HORA (29-sep-2026). `profile_institucion.created` guarda hora
+# LOCAL de Bogota pero esta tipada como TIMESTAMP, asi que BigQuery la trata
+# como UTC: convertir con 'America/Bogota' le resta 5 horas de mas. Aca NO se
+# convierte, a proposito.
+#
+# Como se comprobo, porque la diferencia no es obvia: se miro la distribucion
+# horaria de las 176.279 solicitudes de 2026. Convertida da pico a las 5-6 AM
+# y muere a las 3 PM — imposible para solicitudes de credito de consumo. Sin
+# convertir da pico 10-11 AM con cola hasta las 7 PM, que es un dia habil
+# normal. La campana de WhatsApp del 29-sep lo confirmo: salio 10:00 y las
+# solicitudes aparecen 10:27, 10:51, 11:03... (convertidas se veian a las
+# 5:27 AM, o sea ANTES del envio, y la lectura habria sido "no paso nada").
+#
+# A nivel de DIA el error afecta 0,77% de los registros (los creados entre
+# medianoche y 5 AM caen en el dia anterior). El resto del tablero sigue
+# convirtiendo — se decidio no tocarlo por ahora (29-sep-2026), pero ESTE
+# pull usa la hora correcta porque es el unico que mide por hora.
 SQL_SOLICITUDES = """
 WITH oficial AS (
   SELECT pr.profile_institucion_id,
@@ -118,7 +136,13 @@ WITH oficial AS (
   WHERE SAFE_CAST(JSON_VALUE(pr.engine_decision, '$.is_recurrence') AS BOOL) IS TRUE
 )
 SELECT
-  CAST(DATE(app.created, 'America/Bogota') AS STRING)  AS fecha,
+  CAST(DATE(app.created) AS STRING)                    AS fecha,
+  FORMAT_TIMESTAMP('%H:%M', app.created)               AS hora,
+  CAST(EXTRACT(HOUR FROM app.created) AS INT64)        AS hora_num,
+  -- El medio por el que llego la solicitud. 'pre-check' es a donde apuntan
+  -- las campanas de WhatsApp de segundos creditos, asi que es la llave de
+  -- atribucion del frente.
+  COALESCE(NULLIF(TRIM(app.client_app_origination_medium), ''), '(sin medio)') AS medio,
   app.estado                                           AS estado,
   CAST(app.medico_id AS STRING)                        AS id_sede,
   COALESCE(im.especialidad, '(sin especialidad)')      AS especialidad,
@@ -149,10 +173,11 @@ def main():
     T['SEG_ELEGIBLES'] = [['id_sede', 'especialidad', 'monto']] + [
         [r['id_sede'] or '', r['especialidad'], int(r['monto'] or 0)] for r in ele]
 
-    cab = ['fecha', 'estado', 'id_sede', 'especialidad', 'id_sede_ant',
-           'especialidad_ant', 'monto', 'misma_sede']
+    cab = ['fecha', 'hora', 'hora_num', 'medio', 'estado', 'id_sede',
+           'especialidad', 'id_sede_ant', 'especialidad_ant', 'monto', 'misma_sede']
     T['SEG_SOLICITUDES'] = [cab] + [
-        [r['fecha'], r['estado'], r['id_sede'] or '', r['especialidad'],
+        [r['fecha'], r['hora'], int(r['hora_num'] or 0), r['medio'],
+         r['estado'], r['id_sede'] or '', r['especialidad'],
          r['id_sede_ant'] or '', r['especialidad_ant'], int(r['monto'] or 0),
          int(r['misma_sede'] or 0)] for r in sol]
 
@@ -175,6 +200,13 @@ def main():
         print('  misma sede               %d de %d' % (
             sum(1 for r in sol if int(r['misma_sede'] or 0)), len(sol)))
     import collections
+    print()
+    print('  ATRIBUCION por medio de origen:')
+    for m, n in collections.Counter(r['medio'] for r in sol).most_common():
+        print('     %-14s %d' % (m, n))
+    print('  pre-check por dia:')
+    pd = collections.Counter(r['fecha'] for r in sol if r['medio'] == 'pre-check')
+    for d in sorted(pd): print('     %s  %d' % (d, pd[d]))
     est = collections.Counter(r['estado'] for r in sol)
     print('  estados                  %s' % dict(est))
     cross = collections.Counter(

@@ -418,8 +418,25 @@ function chequearF4(ctx, d, orig, rol) {
     num(ctx, m.desembolsado, 'f4.metas[' + m.semana + '].desembolsado', { min: 0 });
     pct(ctx, m.contacto, 'f4.metas[' + m.semana + '].contacto');
     pct(ctx, m.metaPct, 'f4.metas[' + m.semana + '].metaPct');
-    // cobertura puede pasar de 100 (se trabaja atraso), pero no de 300
-    pct(ctx, m.cobertura, 'f4.metas[' + m.semana + '].cobertura', 300);
+    /* El tope subio de 300 a 1000 el 29-sep-2026, despues de rastrear el
+       mecanismo — no para que el test pasara.
+
+       cobertura = monto trabajado / enM, y enM = mApr - mFirm (lo aprobado
+       ese dia MENOS lo que firmo ese mismo dia). O sea, el denominador es
+       "lo que de verdad quedo esperando rescate", no lo aprobado a secas.
+       En un dia donde casi todo firma de una, enM se encoge muchisimo y el
+       % se dispara aunque el equipo haya trabajado lo normal.
+
+       Es justo lo que paso el 28-sep: $403M trabajados (en linea con los
+       $546M del 22 y los $416M del 17) contra ~$82M netos entrando ->
+       492,9%. Y encaja con lo que se midio aparte ese mismo dia en el
+       embudo de WhatsApp: de los aprobados con fecha de firma, 752 de 754
+       firmaron el MISMO dia. Con ese patron, superar 300 es cuestion de
+       tiempo, no una anomalia.
+
+       Lo que el tope sigue cuidando es el error de verdad: un enM cercano a
+       cero que dispare el ratio a miles. */
+    pct(ctx, m.cobertura, 'f4.metas[' + m.semana + '].cobertura', 1000);
     num(ctx, m.cumplimiento, 'f4.metas[' + m.semana + '].cumplimiento', { min: 0, nulOk: true });
     checks++;
     if (m.bolsa > 0 && m.meta === 0) {
@@ -429,7 +446,7 @@ function chequearF4(ctx, d, orig, rol) {
   (ge.metasMes || []).forEach(m => {
     num(ctx, m.meta, 'f4.metasMes[' + m.mes + '].meta', { min: 0 });
     pct(ctx, m.contacto, 'f4.metasMes[' + m.mes + '].contacto');
-    pct(ctx, m.cobertura, 'f4.metasMes[' + m.mes + '].cobertura', 300);
+    pct(ctx, m.cobertura, 'f4.metasMes[' + m.mes + '].cobertura', 1000);  // ver la nota del tope en f4.metas
     checks++;
     if (m.diasHabiles > m.diasHabilesTotal) {
       fail(ctx, 'f4.metasMes[' + m.mes + ']: dias transcurridos > total del mes',
@@ -811,6 +828,59 @@ function chequearF8(ctx, d, orig, rol) {
   if (f.cruzaron !== cruzaron) {
     fail(ctx, 'f8.cruzaron no cuadra con las rutas donde origen != destino',
       f.cruzaron + ' vs ' + cruzaron);
+  }
+
+
+  // --- atribucion por medio (29-sep-2026) ---
+  // Recalculo independiente desde SEG_SOLICITUDES cruda, mas los invariantes
+  // que protegen la lectura: los totales por medio tienen que sumar las
+  // solicitudes del periodo, y la serie por dia tiene que sumar lo mismo.
+  if (sinFiltro) {
+    const solA = leerHoja_('SEG_SOLICITUDES');
+    let nPre = 0, nTot = 0;
+    solA.forEach(r => {
+      const dt = String(r.fecha || '').substring(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dt)) return;
+      if (d.meta.inicio && dt < d.meta.inicio) return;
+      if (d.meta.fin && dt > d.meta.fin) return;
+      nTot++;
+      if (String(r.medio || '').trim() === 'pre-check') nPre++;
+    });
+    const sumaMedio = (f.porMedio || []).reduce((a, m) => a + (m.n || 0), 0);
+    checks++;
+    if (sumaMedio !== nTot) {
+      fail(ctx, 'f8.porMedio: la suma por medio no da las solicitudes del periodo',
+        sumaMedio + ' vs ' + nTot);
+    }
+    const pre = (f.porMedio || []).filter(m => m.medio === 'pre-check')[0];
+    checks++;
+    if ((pre ? pre.n : 0) !== nPre) {
+      fail(ctx, 'f8.porMedio[pre-check] no cuadra con el recalculo directo',
+        (pre ? pre.n : 0) + ' vs ' + nPre);
+    }
+    const sumaDia = (f.atribDia || []).reduce((a, x) => a + x.campana + x.otros, 0);
+    checks++;
+    if (sumaDia !== nTot) {
+      fail(ctx, 'f8.atribDia no suma las solicitudes del periodo',
+        sumaDia + ' vs ' + nTot);
+    }
+  }
+  // Cada medio: los desenlaces nunca pueden pasar de las solicitudes.
+  (f.porMedio || []).forEach(m => {
+    checks++;
+    if (m.aprobadas + m.rechazadas > m.n) {
+      fail(ctx, 'f8.porMedio[' + m.medio + ']: aprobadas+rechazadas > solicitudes',
+        (m.aprobadas + m.rechazadas) + ' > ' + m.n);
+    }
+    num(ctx, m.monto, 'f8.porMedio[' + m.medio + '].monto', { min: 0 });
+  });
+  // La serie horaria pertenece al dia pico y no puede tener mas que ese dia.
+  if (f.diaPico) {
+    const sumaH = (f.horas || []).reduce((a, x) => a + x.campana + x.otros, 0);
+    checks++;
+    if (sumaH > f.diaPicoN) {
+      fail(ctx, 'f8.horas suma mas que el dia pico', sumaH + ' > ' + f.diaPicoN);
+    }
   }
 
   // --- la serie diaria suma lo mismo que las tarjetas ---

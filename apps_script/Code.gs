@@ -5589,6 +5589,97 @@ function armarF8_(R, U) {
   f.cruzaron = 0;
   f.rutas.forEach(function (r) { if (r.origen !== r.destino) f.cruzaron += r.n; });
 
+  // ---- ATRIBUCION: de que medio llegaron las solicitudes ----------------
+  /* Agregado el 29-sep-2026, despues de la primera campana de WhatsApp a
+     los elegibles de segundo credito. Las campanas mandan a la gente a
+     aplicar por `pre-check`, asi que ese medio es la llave de atribucion:
+     cuando sale una campana, pre-check se dispara y el resto no se mueve.
+     Medido ese dia: pre-check traia 3 solicitudes en 7 dias (2 el 22-sep,
+     1 el 24-sep) y la manana de la campana trajo 8.
+
+     Esto NO es un panel de "la campana de hoy" sino de atribucion en el
+     tiempo, a proposito: un panel atado a una fecha caduca y hay que
+     rehacerlo en cada envio. Asi, cada campana futura se ve sola como un
+     pico de pre-check, sin tocar codigo.
+
+     La HORA viene sin convertir desde pull_segundos.py (ver el comentario
+     largo de ese archivo): `created` guarda hora local de Bogota pero esta
+     tipada como TIMESTAMP, y convertirla le resta 5 horas — lo que hacia
+     ver las solicitudes de una campana de las 10 AM como si fueran de las
+     5 AM, o sea ANTES del envio. */
+  var MEDIO_CAMPANA = 'pre-check';
+  var porMedio = {}, porDiaMedio = {}, porHora = {};
+  var CONV_SEG = CONV;   // misma definicion de desembolso que el resto
+  sol.forEach(function (r) {
+    var m = String(r.medio || '(sin medio)').trim() || '(sin medio)';
+    var d = String(r.fecha || '').substring(0, 10);
+    var e = String(r.estado || '').trim();
+    if (!porMedio[m]) {
+      porMedio[m] = { medio: m, n: 0, aprobadas: 0, rechazadas: 0,
+                      desembolsadas: 0, monto: 0 };
+    }
+    var b = porMedio[m];
+    b.n++;
+    if (e === 'approved') b.aprobadas++;
+    if (e.indexOf('rejected') === 0) b.rechazadas++;
+    if (CONV_SEG[e]) { b.desembolsadas++; b.monto += num_(r.monto); }
+    if (e === 'approved') b.monto += num_(r.monto);
+
+    if (!porDiaMedio[d]) porDiaMedio[d] = { campana: 0, otros: 0 };
+    if (m === MEDIO_CAMPANA) porDiaMedio[d].campana++; else porDiaMedio[d].otros++;
+  });
+  f.porMedio = Object.keys(porMedio).map(function (k) { return porMedio[k]; })
+    .sort(function (a, b) { return b.n - a.n; });
+
+  var diasAtrib = Object.keys(porDiaMedio).sort();
+  f.atribDia = diasAtrib.map(function (d) {
+    return { x: d, campana: porDiaMedio[d].campana, otros: porDiaMedio[d].otros };
+  });
+
+  /* El dia mas activo del rango, hora por hora. Sirve para ver la respuesta
+     a un envio (a que hora entro la primera solicitud, cuanto duro el
+     racimo) sin tener que fijar la fecha de una campana en el codigo. */
+  var diaTop = '', maxDia = 0;
+  diasAtrib.forEach(function (d) {
+    var t = porDiaMedio[d].campana + porDiaMedio[d].otros;
+    if (t > maxDia || (t === maxDia && d > diaTop)) { maxDia = t; diaTop = d; }
+  });
+  f.diaPico = diaTop;
+  f.diaPicoN = maxDia;
+  if (diaTop) {
+    sol.forEach(function (r) {
+      if (String(r.fecha || '').substring(0, 10) !== diaTop) return;
+      var h = Number(r.hora_num);
+      if (isNaN(h)) return;
+      if (!porHora[h]) porHora[h] = { campana: 0, otros: 0 };
+      if (String(r.medio || '').trim() === MEDIO_CAMPANA) porHora[h].campana++;
+      else porHora[h].otros++;
+    });
+    // Se pinta la jornada completa (6 AM a 8 PM) y no solo las horas con
+    // dato: un racimo de 4 horas se lee como racimo solo si al lado se ven
+    // las horas vacias.
+    f.horas = [];
+    for (var hh = 6; hh <= 20; hh++) {
+      var bh = porHora[hh] || { campana: 0, otros: 0 };
+      f.horas.push({ x: ('0' + hh).slice(-2) + ':00',
+                     campana: bh.campana, otros: bh.otros });
+    }
+  } else {
+    f.horas = [];
+  }
+
+  // Cuan MADURA es la cohorte: con horas de vida, "0 desembolsos" no es un
+  // fracaso, es que no ha pasado el tiempo. Sin esto la tabla de desenlace
+  // se lee al reves (ver la trampa del embudo inmaduro).
+  var masNueva = '', masVieja = '';
+  sol.forEach(function (r) {
+    var ts = String(r.fecha || '').substring(0, 10) + ' ' + String(r.hora || '');
+    if (!masVieja || ts < masVieja) masVieja = ts;
+    if (ts > masNueva) masNueva = ts;
+  });
+  f.cohorteDesde = masVieja;
+  f.cohorteHasta = masNueva;
+
   f.periodo = R.inicio + ' a ' + R.fin;
   f.universo = U.etiqueta;
 

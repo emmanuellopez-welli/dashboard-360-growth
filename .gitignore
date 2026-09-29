@@ -60,3 +60,7 @@ Dashboard_360_WELLI_previa.html
 sin_mensaje_*.csv
 *_pacientes*.csv
 *aprobados*.csv
+
+# Bytecode de Python
+__pycache__/
+*.pyc

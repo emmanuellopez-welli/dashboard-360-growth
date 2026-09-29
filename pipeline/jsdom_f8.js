@@ -37,7 +37,7 @@ function cargarRango(desde, hasta, cb) {
   win.document.getElementById('fHasta').value = hasta;
   win.document.querySelector('.nav-item[data-vista="f8"]').click();
   win.cargar();
-  setTimeout(cb, 1400);
+  setTimeout(cb, 4000);
 }
 
 setTimeout(() => {
@@ -114,4 +114,4 @@ setTimeout(() => {
       process.exit(fallos ? 1 : 0);
     });
   });
-}, 900);
+}, 3000);

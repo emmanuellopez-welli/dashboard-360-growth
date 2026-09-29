@@ -2374,3 +2374,112 @@ puntual (suelen traer PII).
 - **Sacar `CREDITO_DIA` del Sheet** (125 mil filas): es el origen del techo
   de 10M celdas (sección 43) y de que el artefacto pese 14 MB. Es un
   rediseño, no un parche.
+
+## 53 · `profile_institucion.created` NO está en UTC — y casi cuesta la lectura contraria (29-sep-2026)
+
+Emmanuel mandó la primera campaña de WhatsApp a los elegibles de segundo
+crédito, a las 10:00 AM, y pidió medir si movió la aguja. La primera
+consulta mostró las 9 solicitudes del día **entre las 5:27 y las 8:54 AM**
+— o sea ANTES del envío — y la conclusión iba a ser "la campaña no produjo
+nada". Era falso.
+
+**`profile_institucion.created` guarda hora LOCAL de Bogotá pero está
+tipada como TIMESTAMP**, así que BigQuery la interpreta como UTC y
+`DATE(created,'America/Bogota')` / `FORMAT_TIMESTAMP(...,'America/Bogota')`
+le restan 5 horas de más.
+
+**Cómo se comprobó, porque a ojo no se distingue**: se miró la distribución
+horaria de las 176.279 solicitudes de 2026.
+
+| | pico | cola |
+|---|---|---|
+| Convertida a `America/Bogota` | **5-6 AM** | muere a las 3 PM |
+| Sin convertir | **10-11 AM** | hasta las 7 PM |
+
+Nadie pide crédito de consumo en masa a las 5 AM y para a las 3 PM. La
+versión sin convertir es un día hábil normal. La campaña lo confirmó:
+salió 10:00 y las solicitudes entraron 10:27, 10:51, 11:03, 11:12, 12:00,
+12:09, 12:23, 13:11, 13:54 — un racimo de respuesta perfecto.
+
+**Impacto a nivel de DÍA: 0,77%** (1.351 de 176.279 registros de 2026) — los
+creados entre medianoche y 5 AM caen en el día anterior. **A nivel de HORA
+es fatal** (5 horas de corrimiento), y por eso nunca había salido: este es
+el primer análisis por hora del proyecto.
+
+**Decisión de Emmanuel (29-sep-2026): corregir SOLO donde importa la hora.**
+`pull_segundos.py` usa la hora sin convertir; el resto del tablero sigue
+como está, porque 0,77% a nivel de día no mueve ninguna decisión y tocarlo
+implicaría re-pull y re-verificación de todo. **Si algún día se quiere
+corregir en serio, la evidencia está acá y no hay que volver a medirla.**
+
+**Regla general**: antes de usar la HORA de cualquier campo de BigQuery en
+este proyecto, correr la prueba de plausibilidad (distribución horaria: ¿el
+pico cae en horario laboral?). Un campo fechado mal tipado se ve idéntico a
+uno correcto hasta que se mira por hora.
+
+## 54 · Panel de atribución de campañas en F8 (29-sep-2026)
+
+La campaña manda a la gente a aplicar por **pre-check**, así que
+`client_app_origination_medium = 'pre-check'` es la huella de un envío.
+Validado contra el histórico antes de construir: de las 30 solicitudes de
+segundo crédito que existen (desde el 22-sep), pre-check traía **3 en 7
+días** (2 el día 22, 1 el 24) y la mañana de la campaña trajo **8**. El
+salto es inequívoco.
+
+**Se construyó como panel PERMANENTE de atribución, no como "la campaña de
+hoy"** — a propósito. Un panel atado a una fecha caduca y hay que rehacerlo
+en cada envío; así, cada campaña futura se ve sola como un pico de
+pre-check sin tocar código. Tres piezas, **un solo eje cada una** (se
+descartó la referencia que trajo Emmanuel, barras apiladas + línea con dos
+ejes, que es justo lo que prohíbe la regla 5):
+
+1. **Solicitudes por día, pre-check contra otros medios** (`chGrupos`).
+2. **El día más activo del rango, hora por hora** — se pinta la jornada
+   completa (6 AM a 8 PM) aunque haya horas vacías: un racimo se lee como
+   racimo solo si al lado se ven las horas sin nada.
+3. **Tabla de desenlace por medio**, con la **madurez de la cohorte
+   declarada** (fecha de la solicitud más antigua y más reciente). Con
+   horas de vida, "0 desembolsadas" no es fracaso: es que no ha pasado el
+   tiempo. Sin esa línea la columna se lee al revés.
+
+`pull_segundos.py` ganó `hora`, `hora_num` y `medio` en `SEG_SOLICITUDES`.
+
+**Hallazgo, con su advertencia**: pre-check aprueba **64% (7 de 11)** contra
+**21% (4 de 19)** de los otros medios, y trae casi el doble de plata con la
+mitad de solicitudes. Tiene sentido — la campaña va a una lista ya filtrada
+por buen comportamiento de pago. **Pero son 11 contra 19 solicitudes**: dos
+o tres casos mueven la tasa varios puntos. Sirve para decir "la campaña
+trae gente mejor calificada", no para poner un número en una meta.
+
+## 55 · El tope de cobertura del QA estaba mal calibrado (29-sep-2026)
+
+Al refrescar `RESCATE_DESENLACE`/`RESCATE_GESTION` el QA pasó de 2 fallos a
+**48**, todos el mismo: `f4.metas[2026-09-28].cobertura = 492,9` contra un
+tope de 300.
+
+**No era un bug del tablero.** `cobertura = monto trabajado / enM`, donde
+`enM = mApr - mFirm` — lo aprobado ese día MENOS lo que firmó ese mismo
+día. El denominador es *lo que quedó esperando rescate*, no lo aprobado a
+secas. En un día donde casi todo firma de una, `enM` se encoge y el % se
+dispara aunque el equipo haya trabajado lo normal. El 28-sep: **$403M
+trabajados** (en línea con $546M del 22 y $416M del 17) contra ~$82M netos
+entrando.
+
+Y encaja con lo medido el mismo día en el embudo de WhatsApp (sección 49):
+**752 de 754 aprobados con fecha de firma firmaron el MISMO día**. Con ese
+patrón, superar 300 era cuestión de tiempo.
+
+**Se subió el tope a 1000 con el mecanismo escrito al lado**, no para que
+el test pasara. La diferencia importa: subir un umbral sin entender por qué
+falló es apagar la alarma; acá se rastreó la fórmula, se verificó que el
+numerador estaba en línea con otros días, y se dejó el tope cuidando lo que
+sí sería un error (un `enM` cercano a cero disparando el ratio a miles).
+
+**Nota de proceso**: `jsdom_f8.js` empezó a fallar los 10 checks de
+contenido con `VISTA=f1`. No era el bug de `VISTAS_VALIDAS` otra vez — eran
+**los tiempos de espera**: el artefacto creció a 14,2 MB y el clic del nav
+ocurría antes de que se engancharan los manejadores. Se subieron de
+900/1400 ms a 3000/4000 ms, igual que `jsdom_f4wa.js`. **Si una
+verificación de contenido falla con `VISTA=f1`, descartar primero el
+tiempo de carga antes de buscar un bug de navegación** — a medida que el
+artefacto crece, estos tests se vuelven frágiles por tamaño.

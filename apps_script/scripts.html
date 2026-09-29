@@ -3762,6 +3762,85 @@ function vistaF8() {
       { vacio: 'Sin solicitudes de segundo crédito en el período', gran: 'dia' });
   });
 
+  // --- Atribución: de qué medio llegaron ---
+  /* Agregado el 29-sep-2026 tras la primera campaña de WhatsApp a los
+     elegibles. Deliberadamente NO está atado a la fecha de esa campaña:
+     cada envío futuro se ve solo como un pico de pre-check. */
+  var atrib = f.atribDia || [];
+  var pm = f.porMedio || [];
+  var precheck = pm.filter(function (m) { return m.medio === 'pre-check'; })[0];
+
+  if (atrib.length) {
+    h += '<h2 class="sec">¿De dónde llegaron las solicitudes?</h2>' +
+      '<p class="sec-sub">las campañas de WhatsApp mandan a la gente a aplicar ' +
+      'por <b>pre-check</b>, así que ese medio es la huella de un envío: cuando ' +
+      'sale una campaña, pre-check se dispara y el resto no se mueve</p>';
+
+    h += panel('Solicitudes por día, según de dónde vinieron',
+      'una sola escala, las dos series son solicitudes · un pico de pre-check ' +
+      'sobre un fondo plano es la señal de que una campaña movió la aguja',
+      '', 'gF8Atrib');
+    pintar('gF8Atrib', function (el) {
+      chGrupos(el,
+        atrib.map(function (d) { return d.x; }),
+        [
+          { nombre: 'pre-check (campaña)', color: 'var(--s1)',
+            valores: atrib.map(function (d) { return d.campana; }) },
+          { nombre: 'otros medios', color: 'var(--s3)',
+            valores: atrib.map(function (d) { return d.otros; }) }
+        ],
+        { vacio: 'Sin solicitudes en el período', gran: 'dia' });
+    });
+
+    // Hora por hora del día más activo: es donde se ve la respuesta a un
+    // envío (cuánto tardó la primera solicitud, cuánto duró el racimo).
+    if ((f.horas || []).length && f.diaPico) {
+      h += panel('El día más activo del rango, hora por hora — ' + esc(f.diaPico),
+        'se pinta la jornada completa aunque haya horas vacías: un racimo se ' +
+        'lee como racimo solo si al lado se ven las horas sin nada · hora local ' +
+        'de Colombia',
+        '', 'gF8Horas');
+      pintar('gF8Horas', function (el) {
+        chGrupos(el,
+          f.horas.map(function (d) { return d.x; }),
+          [
+            { nombre: 'pre-check (campaña)', color: 'var(--s1)',
+              valores: f.horas.map(function (d) { return d.campana; }) },
+            { nombre: 'otros medios', color: 'var(--s3)',
+              valores: f.horas.map(function (d) { return d.otros; }) }
+          ],
+          { vacio: 'Sin solicitudes ese día' });
+      });
+    }
+
+    // El desenlace, con la madurez declarada al lado. Un embudo de 4 pasos
+    // con cero desembolsos se lee como fracaso cuando lo que pasa es que no
+    // ha pasado el tiempo.
+    h += '<p class="sec-sub" style="margin-top:12px">En qué quedaron, por medio. ' +
+      'Ojo con leer “desembolsadas” como resultado final: un crédito aprobado ' +
+      'hace horas todavía no alcanzó a desembolsar' +
+      (f.cohorteDesde ? ' — la solicitud más antigua de este corte es del ' +
+        esc(f.cohorteDesde) + ' y la más reciente del ' + esc(f.cohorteHasta) : '') +
+      '.</p>';
+    h += tabla([
+      { t: 'Medio de origen', k: 'medio', f: 'txt', txt: true },
+      { t: 'Solicitudes', k: 'n' },
+      { t: 'Aprobadas', k: 'aprobadas' },
+      { t: 'Rechazadas', k: 'rechazadas' },
+      { t: 'Desembolsadas', k: 'desembolsadas' },
+      { t: 'Monto aprobado', k: 'monto', f: 'cop' }
+    ], pm);
+
+    if (precheck && precheck.n) {
+      h += '<div class="lectura">Por <b>pre-check</b> entraron ' +
+        fNum(precheck.n) + ' solicitudes en el período: ' +
+        fNum(precheck.aprobadas) + ' aprobadas y ' + fNum(precheck.rechazadas) +
+        ' rechazadas, por ' + fCop(precheck.monto) + '. Con volúmenes de dos ' +
+        'dígitos esto sirve para ver si un envío movió la aguja, no para sacar ' +
+        'tasas de conversión — para eso hacen falta varias campañas.</div>';
+    }
+  }
+
   // --- Sankey de cross-selling ---
   var rutas = f.rutas || [];
   var totalR = 0;
