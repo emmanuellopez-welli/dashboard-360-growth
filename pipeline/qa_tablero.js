@@ -831,10 +831,10 @@ function chequearF8(ctx, d, orig, rol) {
   }
 
 
-  // --- atribucion por medio (29-sep-2026) ---
-  // Recalculo independiente desde SEG_SOLICITUDES cruda, mas los invariantes
-  // que protegen la lectura: los totales por medio tienen que sumar las
-  // solicitudes del periodo, y la serie por dia tiene que sumar lo mismo.
+  // --- atribucion por dia (29-sep-2026) ---
+  // El grafico por hora y la tabla por medio se quitaron de pantalla el
+  // mismo dia, asi que aca solo queda lo que el frente de verdad muestra:
+  // la serie diaria pre-check contra otros medios.
   if (sinFiltro) {
     const solA = leerHoja_('SEG_SOLICITUDES');
     let nPre = 0, nTot = 0;
@@ -846,42 +846,23 @@ function chequearF8(ctx, d, orig, rol) {
       nTot++;
       if (String(r.medio || '').trim() === 'pre-check') nPre++;
     });
-    const sumaMedio = (f.porMedio || []).reduce((a, m) => a + (m.n || 0), 0);
-    checks++;
-    if (sumaMedio !== nTot) {
-      fail(ctx, 'f8.porMedio: la suma por medio no da las solicitudes del periodo',
-        sumaMedio + ' vs ' + nTot);
-    }
-    const pre = (f.porMedio || []).filter(m => m.medio === 'pre-check')[0];
-    checks++;
-    if ((pre ? pre.n : 0) !== nPre) {
-      fail(ctx, 'f8.porMedio[pre-check] no cuadra con el recalculo directo',
-        (pre ? pre.n : 0) + ' vs ' + nPre);
-    }
     const sumaDia = (f.atribDia || []).reduce((a, x) => a + x.campana + x.otros, 0);
+    const sumaPre = (f.atribDia || []).reduce((a, x) => a + x.campana, 0);
     checks++;
     if (sumaDia !== nTot) {
       fail(ctx, 'f8.atribDia no suma las solicitudes del periodo',
         sumaDia + ' vs ' + nTot);
     }
-  }
-  // Cada medio: los desenlaces nunca pueden pasar de las solicitudes.
-  (f.porMedio || []).forEach(m => {
     checks++;
-    if (m.aprobadas + m.rechazadas > m.n) {
-      fail(ctx, 'f8.porMedio[' + m.medio + ']: aprobadas+rechazadas > solicitudes',
-        (m.aprobadas + m.rechazadas) + ' > ' + m.n);
+    if (sumaPre !== nPre) {
+      fail(ctx, 'f8.atribDia: el total de pre-check no cuadra con el recalculo',
+        sumaPre + ' vs ' + nPre);
     }
-    num(ctx, m.monto, 'f8.porMedio[' + m.medio + '].monto', { min: 0 });
+  }
+  (f.atribDia || []).forEach(x => {
+    num(ctx, x.campana, 'f8.atribDia[' + x.x + '].campana', { min: 0 });
+    num(ctx, x.otros, 'f8.atribDia[' + x.x + '].otros', { min: 0 });
   });
-  // La serie horaria pertenece al dia pico y no puede tener mas que ese dia.
-  if (f.diaPico) {
-    const sumaH = (f.horas || []).reduce((a, x) => a + x.campana + x.otros, 0);
-    checks++;
-    if (sumaH > f.diaPicoN) {
-      fail(ctx, 'f8.horas suma mas que el dia pico', sumaH + ' > ' + f.diaPicoN);
-    }
-  }
 
   // --- la serie diaria suma lo mismo que las tarjetas ---
   const sSol = (f.serie || []).reduce((a, p) => a + (p.solicitudes || 0), 0);

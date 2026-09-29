@@ -5607,78 +5607,26 @@ function armarF8_(R, U) {
      tipada como TIMESTAMP, y convertirla le resta 5 horas — lo que hacia
      ver las solicitudes de una campana de las 10 AM como si fueran de las
      5 AM, o sea ANTES del envio. */
+  /* 29-sep-2026, mismo dia: se quitaron de pantalla el grafico por hora y
+     la tabla de desenlace por medio, a pedido de Emmanuel. Con ellos se
+     borraron aca `porMedio`, la serie horaria (`f.horas`/`f.diaPico`) y la
+     madurez de cohorte (`f.cohorteDesde`/`Hasta`) — quedaron sin ningun
+     consumidor y no se dejan calculando (regla 33). Queda solo lo que
+     alimenta el grafico diario.
+
+     Si algun dia se quiere volver a la vista por hora, `SEG_SOLICITUDES` ya
+     trae `hora` y `hora_num`: el dato esta, solo hay que volver a agregarlo. */
   var MEDIO_CAMPANA = 'pre-check';
-  var porMedio = {}, porDiaMedio = {}, porHora = {};
-  var CONV_SEG = CONV;   // misma definicion de desembolso que el resto
+  var porDiaMedio = {};
   sol.forEach(function (r) {
     var m = String(r.medio || '(sin medio)').trim() || '(sin medio)';
     var d = String(r.fecha || '').substring(0, 10);
-    var e = String(r.estado || '').trim();
-    if (!porMedio[m]) {
-      porMedio[m] = { medio: m, n: 0, aprobadas: 0, rechazadas: 0,
-                      desembolsadas: 0, monto: 0 };
-    }
-    var b = porMedio[m];
-    b.n++;
-    if (e === 'approved') b.aprobadas++;
-    if (e.indexOf('rejected') === 0) b.rechazadas++;
-    if (CONV_SEG[e]) { b.desembolsadas++; b.monto += num_(r.monto); }
-    if (e === 'approved') b.monto += num_(r.monto);
-
     if (!porDiaMedio[d]) porDiaMedio[d] = { campana: 0, otros: 0 };
     if (m === MEDIO_CAMPANA) porDiaMedio[d].campana++; else porDiaMedio[d].otros++;
   });
-  f.porMedio = Object.keys(porMedio).map(function (k) { return porMedio[k]; })
-    .sort(function (a, b) { return b.n - a.n; });
-
-  var diasAtrib = Object.keys(porDiaMedio).sort();
-  f.atribDia = diasAtrib.map(function (d) {
+  f.atribDia = Object.keys(porDiaMedio).sort().map(function (d) {
     return { x: d, campana: porDiaMedio[d].campana, otros: porDiaMedio[d].otros };
   });
-
-  /* El dia mas activo del rango, hora por hora. Sirve para ver la respuesta
-     a un envio (a que hora entro la primera solicitud, cuanto duro el
-     racimo) sin tener que fijar la fecha de una campana en el codigo. */
-  var diaTop = '', maxDia = 0;
-  diasAtrib.forEach(function (d) {
-    var t = porDiaMedio[d].campana + porDiaMedio[d].otros;
-    if (t > maxDia || (t === maxDia && d > diaTop)) { maxDia = t; diaTop = d; }
-  });
-  f.diaPico = diaTop;
-  f.diaPicoN = maxDia;
-  if (diaTop) {
-    sol.forEach(function (r) {
-      if (String(r.fecha || '').substring(0, 10) !== diaTop) return;
-      var h = Number(r.hora_num);
-      if (isNaN(h)) return;
-      if (!porHora[h]) porHora[h] = { campana: 0, otros: 0 };
-      if (String(r.medio || '').trim() === MEDIO_CAMPANA) porHora[h].campana++;
-      else porHora[h].otros++;
-    });
-    // Se pinta la jornada completa (6 AM a 8 PM) y no solo las horas con
-    // dato: un racimo de 4 horas se lee como racimo solo si al lado se ven
-    // las horas vacias.
-    f.horas = [];
-    for (var hh = 6; hh <= 20; hh++) {
-      var bh = porHora[hh] || { campana: 0, otros: 0 };
-      f.horas.push({ x: ('0' + hh).slice(-2) + ':00',
-                     campana: bh.campana, otros: bh.otros });
-    }
-  } else {
-    f.horas = [];
-  }
-
-  // Cuan MADURA es la cohorte: con horas de vida, "0 desembolsos" no es un
-  // fracaso, es que no ha pasado el tiempo. Sin esto la tabla de desenlace
-  // se lee al reves (ver la trampa del embudo inmaduro).
-  var masNueva = '', masVieja = '';
-  sol.forEach(function (r) {
-    var ts = String(r.fecha || '').substring(0, 10) + ' ' + String(r.hora || '');
-    if (!masVieja || ts < masVieja) masVieja = ts;
-    if (ts > masNueva) masNueva = ts;
-  });
-  f.cohorteDesde = masVieja;
-  f.cohorteHasta = masNueva;
 
   f.periodo = R.inicio + ' a ' + R.fin;
   f.universo = U.etiqueta;

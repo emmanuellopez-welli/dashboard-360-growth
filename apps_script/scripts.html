@@ -3768,8 +3768,6 @@ function vistaF8() {
      elegibles. Deliberadamente NO está atado a la fecha de esa campaña:
      cada envío futuro se ve solo como un pico de pre-check. */
   var atrib = f.atribDia || [];
-  var pm = f.porMedio || [];
-  var precheck = pm.filter(function (m) { return m.medio === 'pre-check'; })[0];
 
   if (atrib.length) {
     h += '<h2 class="sec">¿De dónde llegaron las solicitudes?</h2>' +
@@ -3801,53 +3799,11 @@ function vistaF8() {
         { vacio: 'Sin solicitudes en el período', gran: 'dia' });
     });
 
-    // Hora por hora del día más activo: es donde se ve la respuesta a un
-    // envío (cuánto tardó la primera solicitud, cuánto duró el racimo).
-    if ((f.horas || []).length && f.diaPico) {
-      h += panel('El día más activo del rango, hora por hora — ' + esc(f.diaPico),
-        'se pinta la jornada completa aunque haya horas vacías: un racimo se ' +
-        'lee como racimo solo si al lado se ven las horas sin nada · hora local ' +
-        'de Colombia',
-        leyAtrib, 'gF8Horas');
-      pintar('gF8Horas', function (el) {
-        chGrupos(el,
-          f.horas.map(function (d) { return d.x; }),
-          [
-            { nombre: 'pre-check (campaña)', color: 'var(--s1)',
-              valores: f.horas.map(function (d) { return d.campana; }) },
-            { nombre: 'otros medios', color: 'var(--s3)',
-              valores: f.horas.map(function (d) { return d.otros; }) }
-          ],
-          { vacio: 'Sin solicitudes ese día' });
-      });
-    }
-
-    // El desenlace, con la madurez declarada al lado. Un embudo de 4 pasos
-    // con cero desembolsos se lee como fracaso cuando lo que pasa es que no
-    // ha pasado el tiempo.
-    h += '<p class="sec-sub" style="margin-top:12px">En qué quedaron, por medio. ' +
-      'Ojo con leer “desembolsadas” como resultado final: un crédito aprobado ' +
-      'hace horas todavía no alcanzó a desembolsar' +
-      (f.cohorteDesde ? ' — la solicitud más antigua de este corte es del ' +
-        esc(f.cohorteDesde) + ' y la más reciente del ' + esc(f.cohorteHasta) : '') +
-      '.</p>';
-    h += tabla([
-      { t: 'Medio de origen', k: 'medio', f: 'txt', txt: true },
-      { t: 'Solicitudes', k: 'n' },
-      { t: 'Aprobadas', k: 'aprobadas' },
-      { t: 'Rechazadas', k: 'rechazadas' },
-      { t: 'Desembolsadas', k: 'desembolsadas' },
-      { t: 'Monto aprobado', k: 'monto', f: 'cop' }
-    ], pm);
-
-    if (precheck && precheck.n) {
-      h += '<div class="lectura">Por <b>pre-check</b> entraron ' +
-        fNum(precheck.n) + ' solicitudes en el período: ' +
-        fNum(precheck.aprobadas) + ' aprobadas y ' + fNum(precheck.rechazadas) +
-        ' rechazadas, por ' + fCop(precheck.monto) + '. Con volúmenes de dos ' +
-        'dígitos esto sirve para ver si un envío movió la aguja, no para sacar ' +
-        'tasas de conversión — para eso hacen falta varias campañas.</div>';
-    }
+    /* El gráfico por hora y la tabla de desenlace por medio se quitaron el
+       29-sep-2026, el mismo día que se construyeron, a pedido de Emmanuel.
+       La sección se queda con el gráfico diario, que es el que responde la
+       pregunta ("¿un envío movió la aguja?") sin pedirle al lector que
+       interprete nada más. */
   }
 
   // --- Sankey de cross-selling ---

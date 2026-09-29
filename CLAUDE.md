@@ -2501,3 +2501,40 @@ ocurría antes de que se engancharan los manejadores. Se subieron de
 verificación de contenido falla con `VISTA=f1`, descartar primero el
 tiempo de carga antes de buscar un bug de navegación** — a medida que el
 artefacto crece, estos tests se vuelven frágiles por tamaño.
+
+## 56 · Dos paneles de F8 borrados el mismo dia que se construyeron (29-sep-2026)
+
+De la seccion 54 quedaron en pie solo dos de las tres piezas de atribucion.
+Emmanuel pidio borrar **la grafica por hora del dia mas activo** y **la tabla
+de desenlace por medio** ("Las dos"), horas despues de publicarlas. F8 queda
+con: las 4 tarjetas, solicitudes vs desembolsos por dia, la atribucion diaria
+(pre-check contra otros medios) y el Sankey de especialidades.
+
+**Limpieza de codigo muerto aguas arriba (regla 33), no solo del HTML**: al
+quitar esos dos paneles, `f.porMedio`, `f.horas`, `f.diaPico`, `f.diaPicoN`,
+`f.cohorteDesde` y `f.cohorteHasta` quedaron sin ningun consumidor en
+`scripts.html` — se borraron de `armarF8_` en vez de dejarlos calculando algo
+que nadie lee. El bucle que quedo solo arma `f.atribDia`. Las variables
+huerfanas del frontend (`pm`, `precheck`) tambien se fueron.
+
+**El dato crudo SI se dejo**: `SEG_SOLICITUDES` conserva `hora` y `hora_num`
+(seccion 54). Si algun dia se quiere volver a la vista por hora, se reagrega
+en `Code.gs`/`scripts.html` sin volver a correr `pull_segundos.py` — esta
+anotado en un comentario ahi mismo.
+
+**QA**: `chequearF8` perdio los chequeos de `porMedio`/`horas`/`diaPico` (ya
+no existe que verificar) y conserva el de `atribDia`: que la suma cuadre con
+el total del periodo, que la serie de pre-check cuadre con un recalculo
+independiente sobre `SEG_SOLICITUDES`, y que ningun dia salga negativo.
+120 combinaciones, 274.011 aserciones, 0 fallos, 0 avisos. `jsdom_stress.js`
+216/0, `jsdom_f8.js` 18/0, `jsdom_f4wa.js` 12/0, `dbg.js` con la pagina
+cargando (regla 50). Publicado como version 109, misma URL.
+
+**Falso positivo que vale anotar para la proxima verificacion de contenido**:
+al comprobar que los paneles ya no estaban, se busco el texto "solicitudes en
+el periodo" — que TAMBIEN aparece en el subtitulo del estado vacio del
+Sankey, asi que el check fallaba con el borrado ya hecho. Se cambio por
+`doc.querySelectorAll('.lectura').length === 0`, que es especifico de lo que
+se borro. **Un negativo de contenido tiene que anclarse a algo que solo exista
+en el panel borrado**, no a una frase generica que el tablero repite en otros
+lados.
