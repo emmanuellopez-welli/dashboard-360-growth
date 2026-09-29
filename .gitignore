@@ -1,0 +1,62 @@
+# =====================================================================
+# Tablero 360 WELLI — que NO se versiona (29-sep-2026)
+# =====================================================================
+
+# --- SECRETOS. Nunca, por ningun motivo. -----------------------------
+.env
+.env.*
+*.pem
+*credentials*.json
+*service-account*.json
+*-key.json
+# .mcp.json lleva la x-consumer-api-key de Composio en texto plano.
+# Se documenta como armarlo en el README, pero el archivo no se versiona.
+.mcp.json
+.claude/
+
+# --- Datos: se regeneran con los pulls, pesan y cambian todos los dias.
+# Versionarlos llenaria el historial de diffs de 20 MB sin ningun valor.
+pipeline/sheet_data.json
+pipeline/sheet_data.*.json
+pipeline/tables_*.json
+pipeline/*.csv
+
+# --- Dependencias y artefactos de build ------------------------------
+pipeline/node_modules/
+node_modules/
+pipeline/artifact_tablero.html
+pipeline/Dashboard_360_WELLI_previa.html
+pipeline/previa*.html
+pipeline/probe*.html
+
+# --- Salidas de corridas ---------------------------------------------
+pipeline/logs_reproceso/
+pipeline/reproceso_estado.txt
+pipeline/*.log
+pipeline/*.png
+
+# --- Volcados de analisis puntuales (se rehacen con su script) -------
+pipeline/wa_post15.json
+pipeline/q1_result.json
+pipeline/q2_result.json
+pipeline/ac_conv_ids_sample.json
+
+# --- Archivos sueltos de trabajo en la raiz del proyecto -------------
+# Los .xlsx/.csv de analisis puntuales no son fuente del tablero.
+*.xlsx
+*.pptx
+*.pdf
+Sedes_*.csv
+
+# --- Windows ---------------------------------------------------------
+Thumbs.db
+desktop.ini
+Dashboard_360_WELLI_previa.html
+
+# --- DATOS PERSONALES DE PACIENTES ----------------------------------
+# Listados con nombre, cedula y telefono (ej. sin_mensaje_134.csv, salido
+# del analisis del embudo de WhatsApp). Son datos de habeas data: se
+# generan, se usan y se borran, NUNCA se versionan.
+sin_mensaje_*.csv
+*_pacientes*.csv
+*aprobados*.csv

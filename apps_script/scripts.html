@@ -1,0 +1,4086 @@
+<script>
+/* =====================================================================
+   Tablero 360 Growth — WELLI · frontend
+   ---------------------------------------------------------------------
+   Gráficas SVG propias en vez de una librería, por tres razones:
+   respetan las especificaciones de marca (extremos redondeados de 4px
+   anclados a la base, líneas de 2px, separación de 2px entre barras,
+   rejilla recesiva), cambian de tema sin volver a instanciarse, y no
+   dependen de un CDN — importa porque esto corre embebido en Apps Script.
+
+   Regla que se respeta en todo el archivo: NUNCA dos escalas Y en la
+   misma gráfica. Leads y CPL van en dos paneles apilados que comparten
+   el eje X, que se lee igual y no distorsiona la comparación.
+   ===================================================================== */
+
+var D = null;            // payload del backend
+var VISTA = 'f1';
+var CARGANDO = false;
+
+/* Si algo revienta en el frontend, se ve en pantalla en vez de dejar el
+   spinner girando para siempre. Sin esto, un error de render se manifiesta
+   como "cargando..." eterno y es imposible de diagnosticar en vivo. */
+window.addEventListener('error', function (ev) {
+  var caja = document.getElementById('error');
+  var carga = document.getElementById('cargando');
+  if (carga) carga.classList.add('oculto');
+  if (!caja) return;
+  caja.innerHTML = '<b>Error en el tablero.</b><br>' +
+    esc(ev.message || 'error desconocido') +
+    (ev.filename ? '<br><small>' + esc(ev.filename) + ':' + ev.lineno + '</small>' : '');
+  caja.classList.remove('oculto');
+});
+
+/* ------------------------------------------------------- formateadores */
+function fNum(v) {
+  if (v === null || v === undefined || v === '') return '--';
+  var n = Number(v);
+  if (isNaN(n)) return String(v);
+  return n.toLocaleString('es-CO', { maximumFractionDigits: n < 10 ? 1 : 0 });
+}
+function fCop(v) {
+  if (v === null || v === undefined || v === '') return '--';
+  var n = Number(v);
+  if (isNaN(n)) return String(v);
+  return '$' + Math.round(n).toLocaleString('es-CO');
+}
+/** COP compacto para ejes y celdas apretadas. */
+function fCopC(v) {
+  var n = Number(v || 0);
+  var s = n < 0 ? '-' : '';
+  n = Math.abs(n);
+  // toFixed devuelve punto decimal: en Colombia el separador es la coma, y
+  // quedaba "$2.6 mil M" al lado de un "16,4%" en la misma tarjeta.
+  function un(x) { return x.toFixed(1).replace('.', ','); }
+  if (n >= 1e12) return s + '$' + un(n / 1e12) + ' B';
+  if (n >= 1e9) return s + '$' + un(n / 1e9) + ' mil M';
+  if (n >= 1e6) return s + '$' + un(n / 1e6) + ' M';
+  if (n >= 1e3) return s + '$' + fNum(Math.round(n / 1e3)) + 'k';
+  return s + '$' + fNum(Math.round(n));
+}
+function fPct(v) {
+  if (v === null || v === undefined || v === '') return '--';
+  var n = Number(v);
+  if (isNaN(n)) return String(v);
+  return n.toLocaleString('es-CO', { maximumFractionDigits: 2 }) + '%';
+}
+function fCompacto(v) {
+  var n = Number(v || 0);
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1).replace('.', ',') + 'M';
+  if (Math.abs(n) >= 1e3) return Math.round(n / 1e3) + 'k';
+  return String(Math.round(n));
+}
+function fmt(v, f) {
+  if (f === 'cop') return fCop(v);
+  if (f === 'copC') return fCopC(v);      // montos grandes: $208,2 mil M
+  if (f === 'pct') return fPct(v);
+  // multiplo: "49,5x". Un decimal, porque la parte entera sola pierde
+  // demasiado cuando el numero es chico.
+  if (f === 'x') return fNum(Math.round(Number(v) * 10) / 10) + 'x';
+  return fNum(v);
+}
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+/** Etiqueta legible del eje X según la granularidad del rango. */
+function etiquetaX(x, gran) {
+  if (!x) return '';
+  if (gran === 'mes' || /^\d{4}-\d{2}$/.test(x)) {
+    var mm = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    var p = x.split('-');
+    return mm[Number(p[1]) - 1] + (p[0] ? " '" + p[0].substring(2) : '');
+  }
+  var q = String(x).split('-');
+  if (q.length === 3) return Number(q[2]) + '/' + Number(q[1]);
+  return x;
+}
+function serieColor(i) {
+  var v = ['--s1', '--s2', '--s3', '--s4'];
+  return 'var(' + v[i % 4] + ')';
+}
+
+/* =====================================================================
+   Primitivas de gráfica
+   ===================================================================== */
+
+var W = 680;                                   // ancho interno del viewBox
+
+function ejeMax(max) {                         // techo redondo y legible
+  if (max <= 0) return 1;
+  var mag = Math.pow(10, Math.floor(Math.log10(max)));
+  var n = max / mag;
+  var paso = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return paso * mag;
+}
+
+function tooltipHTML(titulo, filas) {
+  var h = '<b>' + esc(titulo) + '</b>';
+  filas.forEach(function (f) {
+    h += '<div class="fila">' +
+      (f.color ? '<span class="pt" style="background:' + f.color + '"></span>' : '') +
+      esc(f.nombre) + ': <b>' + f.valor + '</b></div>';
+  });
+  return h;
+}
+
+/** Conecta el tooltip flotante de un contenedor .grafica. */
+function montarTooltip(cont) {
+  var tt = document.createElement('div');
+  tt.className = 'tooltip';
+  cont.appendChild(tt);
+  return {
+    mostrar: function (px, py, html) {
+      tt.innerHTML = html;
+      tt.style.left = px + 'px';
+      tt.style.top = (py - 8) + 'px';
+      tt.style.opacity = '1';
+    },
+    ocultar: function () { tt.style.opacity = '0'; }
+  };
+}
+
+/**
+ * Barras verticales, una serie.
+ * @param {Array} datos [{x, y}]
+ */
+function chBarras(cont, datos, opt) {
+  opt = opt || {};
+  if (!datos || !datos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin datos en el período seleccionado') + '</div>';
+    return;
+  }
+  var H = opt.alto || 190;
+  var mI = 46, mD = 10, mS = 12, mB = 26;
+  var aw = W - mI - mD, ah = H - mS - mB;
+  var max = ejeMax(Math.max.apply(null, datos.map(function (d) { return d.y; })));
+  var n = datos.length;
+  var paso = aw / n;
+  var bw = Math.max(3, Math.min(opt.anchoMax || 34, paso - 2));   // 2px de aire
+  var color = opt.color || 'var(--s1)';
+  var fEje = opt.formatoEje || fCompacto;
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'gráfica de barras') + '">';
+
+  // rejilla recesiva + eje Y
+  for (var g = 0; g <= 3; g++) {
+    var vy = max * g / 3;
+    var y = mS + ah - (vy / max) * ah;
+    s += '<line x1="' + mI + '" y1="' + y + '" x2="' + (W - mD) + '" y2="' + y +
+      '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (mI - 7) + '" y="' + (y + 3.5) +
+      '" text-anchor="end" font-size="9.5" fill="var(--texto-3)">' + fEje(vy) + '</text>';
+  }
+
+  // barras con extremo superior redondeado, ancladas a la base
+  datos.forEach(function (d, i) {
+    var bh = max ? (d.y / max) * ah : 0;
+    var x = mI + i * paso + (paso - bw) / 2;
+    var y = mS + ah - bh;
+    var r = Math.min(4, bw / 2, bh);
+    if (bh <= 0.5) {
+      s += '<rect x="' + x + '" y="' + (mS + ah - 1) + '" width="' + bw +
+        '" height="1" fill="' + color + '" opacity=".35"/>';
+    } else {
+      s += '<path d="M' + x + ' ' + (mS + ah) +
+        ' L' + x + ' ' + (y + r) +
+        ' Q' + x + ' ' + y + ' ' + (x + r) + ' ' + y +
+        ' L' + (x + bw - r) + ' ' + y +
+        ' Q' + (x + bw) + ' ' + y + ' ' + (x + bw) + ' ' + (y + r) +
+        ' L' + (x + bw) + ' ' + (mS + ah) + ' Z" fill="' + color + '"/>';
+    }
+    // zona de hover más grande que la barra
+    s += '<rect class="hit" data-i="' + i + '" x="' + (mI + i * paso) + '" y="' + mS +
+      '" width="' + paso + '" height="' + ah + '" fill="transparent"/>';
+  });
+
+  // línea base
+  s += '<line x1="' + mI + '" y1="' + (mS + ah) + '" x2="' + (W - mD) + '" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+
+  // etiquetas X espaciadas para que no colisionen
+  var cada = Math.ceil(n / 12);
+  datos.forEach(function (d, i) {
+    if (i % cada !== 0 && i !== n - 1) return;
+    var cx = mI + i * paso + paso / 2;
+    s += '<text x="' + cx + '" y="' + (H - 8) +
+      '" text-anchor="middle" font-size="9.5" fill="var(--texto-3)">' +
+      esc(etiquetaX(d.x, opt.gran)) + '</text>';
+  });
+
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.hit').forEach(function (h) {
+    h.addEventListener('mouseenter', function () {
+      var i = Number(h.getAttribute('data-i'));
+      var d = datos[i];
+      var rect = svg.getBoundingClientRect();
+      var esc2 = rect.width / W;
+      var cx = (mI + i * paso + paso / 2) * esc2;
+      var bh = max ? (d.y / max) * ah : 0;
+      var cy = (mS + ah - bh) * esc2;
+      var filas = opt.detalle ? opt.detalle(d) :
+        [{ nombre: opt.nombre || 'Valor', valor: (opt.formato || fNum)(d.y), color: color }];
+      tt.mostrar(cx, cy, tooltipHTML(etiquetaX(d.x, opt.gran), filas));
+    });
+    h.addEventListener('mouseleave', tt.ocultar);
+  });
+}
+
+/** Barras con una línea punteada de meta superpuesta, en la MISMA escala
+    (misma unidad — plata contra plata, nunca un eje doble). d.meta puede
+    venir null cuando esa barra no tiene meta calculada. */
+function chBarrasMeta(cont, datos, opt) {
+  opt = opt || {};
+  if (!datos || !datos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin datos en el período seleccionado') + '</div>';
+    return;
+  }
+  var H = opt.alto || 190;
+  var mI = 46, mD = 10, mS = 12, mB = 26;
+  var aw = W - mI - mD, ah = H - mS - mB;
+  var techo = Math.max.apply(null, datos.map(function (d) {
+    return Math.max(d.y || 0, d.meta || 0);
+  }));
+  var max = ejeMax(techo);
+  var n = datos.length;
+  var paso = aw / n;
+  var bw = Math.max(3, Math.min(opt.anchoMax || 34, paso - 2));
+  var color = opt.color || 'var(--s1)';
+  var colorMeta = opt.colorMeta || 'var(--texto-2)';
+  var fEje = opt.formatoEje || fCompacto;
+
+  function px(i) { return mI + i * paso + paso / 2; }
+  function py(v) { return mS + ah - (max ? (v / max) * ah : 0); }
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'gráfica de barras con meta') + '">';
+
+  for (var g = 0; g <= 3; g++) {
+    var vy = max * g / 3;
+    var y = py(vy);
+    s += '<line x1="' + mI + '" y1="' + y + '" x2="' + (W - mD) + '" y2="' + y +
+      '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (mI - 7) + '" y="' + (y + 3.5) +
+      '" text-anchor="end" font-size="9.5" fill="var(--texto-3)">' + fEje(vy) + '</text>';
+  }
+
+  datos.forEach(function (d, i) {
+    var bh = max ? ((d.y || 0) / max) * ah : 0;
+    var x = mI + i * paso + (paso - bw) / 2;
+    var y = mS + ah - bh;
+    var r = Math.min(4, bw / 2, bh);
+    if (bh <= 0.5) {
+      s += '<rect x="' + x + '" y="' + (mS + ah - 1) + '" width="' + bw +
+        '" height="1" fill="' + color + '" opacity=".35"/>';
+    } else {
+      s += '<path d="M' + x + ' ' + (mS + ah) +
+        ' L' + x + ' ' + (y + r) +
+        ' Q' + x + ' ' + y + ' ' + (x + r) + ' ' + y +
+        ' L' + (x + bw - r) + ' ' + y +
+        ' Q' + (x + bw) + ' ' + y + ' ' + (x + bw) + ' ' + (y + r) +
+        ' L' + (x + bw) + ' ' + (mS + ah) + ' Z" fill="' + color + '"/>';
+    }
+    s += '<rect class="hit" data-i="' + i + '" x="' + (mI + i * paso) + '" y="' + mS +
+      '" width="' + paso + '" height="' + ah + '" fill="transparent"/>';
+  });
+
+  // La meta: un escalón punteado por semana, no una línea continua entre
+  // puntos — cada barra tiene SU propia meta y no tiene sentido interpolar
+  // entre la meta de una semana y la de la siguiente.
+  var conMeta = datos.filter(function (d) { return d.meta !== null && d.meta !== undefined; });
+  if (conMeta.length) {
+    var pts = '';
+    datos.forEach(function (d, i) {
+      if (d.meta === null || d.meta === undefined) return;
+      var x1 = mI + i * paso + 3, x2 = mI + (i + 1) * paso - 3;
+      var y2 = py(d.meta);
+      pts += (pts ? ' M' : 'M') + x1 + ' ' + y2 + ' L' + x2 + ' ' + y2;
+    });
+    s += '<path d="' + pts + '" fill="none" stroke="' + colorMeta +
+      '" stroke-width="2" stroke-dasharray="5 3"/>';
+  }
+
+  s += '<line x1="' + mI + '" y1="' + (mS + ah) + '" x2="' + (W - mD) + '" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+
+  var cada = Math.ceil(n / 12);
+  datos.forEach(function (d, i) {
+    if (i % cada !== 0 && i !== n - 1) return;
+    s += '<text x="' + px(i) + '" y="' + (H - 8) +
+      '" text-anchor="middle" font-size="9.5" fill="var(--texto-3)">' +
+      esc(etiquetaX(d.x, opt.gran)) + '</text>';
+  });
+
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.hit').forEach(function (h) {
+    h.addEventListener('mouseenter', function () {
+      var i = Number(h.getAttribute('data-i'));
+      var d = datos[i];
+      var rect = svg.getBoundingClientRect();
+      var esc2 = rect.width / W;
+      var cx = px(i) * esc2;
+      var cy = py(d.y || 0) * esc2;
+      var filas = [{ nombre: opt.nombre || 'Valor',
+        valor: (opt.formato || fNum)(d.y), color: color }];
+      if (d.meta !== null && d.meta !== undefined) {
+        filas.push({ nombre: opt.lineaNombre || 'Meta',
+          valor: (opt.formato || fNum)(d.meta), color: colorMeta });
+      }
+      if (opt.detalle) filas = opt.detalle(d);
+      tt.mostrar(cx, cy, tooltipHTML(etiquetaX(d.x, opt.gran), filas));
+    });
+    h.addEventListener('mouseleave', tt.ocultar);
+  });
+}
+
+/** Línea con marcadores y crosshair. */
+function chLinea(cont, datos, opt) {
+  opt = opt || {};
+  if (!datos || !datos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin datos en el período seleccionado') + '</div>';
+    return;
+  }
+  var H = opt.alto || 170;
+  var mI = 52, mD = 12, mS = 12, mB = 26;
+  var aw = W - mI - mD, ah = H - mS - mB;
+  var techo = Math.max.apply(null, datos.map(function (d) { return d.y; })
+    .concat(opt.metaHorizontal !== undefined && opt.metaHorizontal !== null
+      ? [opt.metaHorizontal] : []));
+  var max = ejeMax(techo);
+  var n = datos.length;
+  var paso = n > 1 ? aw / (n - 1) : 0;
+  var color = opt.color || 'var(--s1)';
+  var fEje = opt.formatoEje || fCompacto;
+
+  function px(i) { return n > 1 ? mI + i * paso : mI + aw / 2; }
+  function py(v) { return mS + ah - (max ? (v / max) * ah : 0); }
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'gráfica de línea') + '">';
+  for (var g = 0; g <= 3; g++) {
+    var vy = max * g / 3, y = py(vy);
+    s += '<line x1="' + mI + '" y1="' + y + '" x2="' + (W - mD) + '" y2="' + y +
+      '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (mI - 7) + '" y="' + (y + 3.5) +
+      '" text-anchor="end" font-size="9.5" fill="var(--texto-3)">' + fEje(vy) + '</text>';
+  }
+
+  // Meta como linea de referencia horizontal, punteada — la misma idea que
+  // la meta de las barras, pero constante en el tiempo (contacto y
+  // cobertura no se recalculan por dia, es un solo objetivo).
+  if (opt.metaHorizontal !== undefined && opt.metaHorizontal !== null) {
+    var yM = py(opt.metaHorizontal);
+    s += '<line x1="' + mI + '" y1="' + yM + '" x2="' + (W - mD) + '" y2="' + yM +
+      '" stroke="var(--texto-2)" stroke-width="2" stroke-dasharray="5 3"/>';
+    s += '<text x="' + (W - mD) + '" y="' + (yM - 4) +
+      '" text-anchor="end" font-size="9.5" font-weight="700" fill="var(--texto-2)">' +
+      esc(opt.metaEtq || 'meta') + '</text>';
+  }
+
+  // Corte de regimen: la serie sigue siendo una linea, pero se avisa donde
+  // deja de ser comparable. Sin esta marca el lector lee una tendencia
+  // continua entre dos operaciones distintas.
+  if (opt.corte) {
+    for (var ci = 0; ci < n; ci++) {
+      if (String(datos[ci].x) !== String(opt.corte)) continue;
+      var cx = px(ci) - paso / 2;
+      s += '<line x1="' + cx + '" y1="' + mS + '" x2="' + cx + '" y2="' +
+        (mS + ah) + '" stroke="var(--texto-3)" stroke-width="1.5" ' +
+        'stroke-dasharray="4 3"/>';
+      // Si el corte cae en la mitad derecha del rango, la etiqueta se
+      // ancla a la IZQUIERDA de la línea (text-anchor end) para que nunca
+      // se salga del viewBox — a la derecha no siempre hay espacio.
+      var cerca = (cx - mI) > aw * 0.55;
+      s += '<text x="' + (cerca ? cx - 6 : cx + 6) + '" y="' + (mS + 10) +
+        '" font-size="9" text-anchor="' + (cerca ? 'end' : 'start') +
+        '" fill="var(--texto-3)">' +
+        esc(opt.corteEtq || 'cambio de operación') + '</text>';
+      break;
+    }
+  }
+
+  var pts = datos.map(function (d, i) { return px(i) + ' ' + py(d.y); }).join(' L');
+  s += '<path d="M' + pts + '" fill="none" stroke="' + color +
+    '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+
+  // marcadores con anillo de superficie de 2px
+  datos.forEach(function (d, i) {
+    s += '<circle cx="' + px(i) + '" cy="' + py(d.y) + '" r="4" fill="' + color +
+      '" stroke="var(--superficie)" stroke-width="2"/>';
+  });
+
+  s += '<line id="cross" x1="0" y1="' + mS + '" x2="0" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1" opacity="0"/>';
+  s += '<line x1="' + mI + '" y1="' + (mS + ah) + '" x2="' + (W - mD) + '" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+
+  var cada = Math.ceil(n / 12);
+  datos.forEach(function (d, i) {
+    if (i % cada !== 0 && i !== n - 1) return;
+    s += '<text x="' + px(i) + '" y="' + (H - 8) +
+      '" text-anchor="middle" font-size="9.5" fill="var(--texto-3)">' +
+      esc(etiquetaX(d.x, opt.gran)) + '</text>';
+  });
+
+  s += '<rect id="capa" x="' + mI + '" y="' + mS + '" width="' + aw + '" height="' + ah +
+    '" fill="transparent"/>';
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  var capa = svg.querySelector('#capa');
+  var cross = svg.querySelector('#cross');
+
+  capa.addEventListener('mousemove', function (e) {
+    var rect = svg.getBoundingClientRect();
+    var escala = rect.width / W;
+    var xi = (e.clientX - rect.left) / escala;
+    var i = n > 1 ? Math.round((xi - mI) / paso) : 0;
+    i = Math.max(0, Math.min(n - 1, i));
+    var d = datos[i];
+    cross.setAttribute('x1', px(i));
+    cross.setAttribute('x2', px(i));
+    cross.setAttribute('opacity', '.7');
+    tt.mostrar(px(i) * escala, py(d.y) * escala, tooltipHTML(etiquetaX(d.x, opt.gran),
+      [{ nombre: opt.nombre || 'Valor', valor: (opt.formato || fNum)(d.y), color: color }]));
+  });
+  capa.addEventListener('mouseleave', function () {
+    cross.setAttribute('opacity', '0');
+    tt.ocultar();
+  });
+}
+
+/* Barras + línea, DOS MEDIDAS DE MAGNITUD DISTINTA (plata contra %), en una
+   sola pieza — eje izquierdo para las barras, eje derecho para la línea,
+   cada uno rotulado en el color de su serie para que nunca se lea como un
+   solo eje. Es la ÚNICA situación donde este tablero usa dos escalas: dos
+   medidas de la MISMA entidad (un mes de rescate) que no se pueden indexar
+   a una base común sin perder el sentido de negocio (plata en pesos, tasa
+   en %). d.barra o d.linea puede venir null (ese mes no tiene esa serie). */
+function chBarrasLinea2Ejes(cont, datos, opt) {
+  opt = opt || {};
+  if (!datos || !datos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin datos en el período seleccionado') + '</div>';
+    return;
+  }
+  var H = opt.alto || 260;
+  var mI = 56, mD = 56, mS = 14, mB = 26;
+  var aw = W - mI - mD, ah = H - mS - mB;
+  var n = datos.length;
+  var paso = aw / n;
+  var bw = Math.max(3, Math.min(opt.anchoMax || 22, paso - 2));
+  var colorBarra = opt.colorBarra || 'var(--s2)';
+  var colorLinea = opt.colorLinea || 'var(--s1)';
+  var colorMeta = 'var(--texto-2)';
+  var fEjeBarra = opt.formatoEjeBarra || fCompacto;
+  var fEjeLinea = opt.formatoEjeLinea || fPct;
+
+  var maxBarra = ejeMax(Math.max.apply(null, datos.map(function (d) { return d.barra || 0; })));
+  var techoLinea = Math.max.apply(null, datos.map(function (d) { return d.linea || 0; })
+    .concat(opt.metaLinea !== undefined && opt.metaLinea !== null ? [opt.metaLinea] : []));
+  var maxLinea = ejeMax(techoLinea);
+
+  function px(i) { return n > 1 ? mI + i * paso + paso / 2 : mI + aw / 2; }
+  function pyB(v) { return mS + ah - (maxBarra ? (v / maxBarra) * ah : 0); }
+  function pyL(v) { return mS + ah - (maxLinea ? (v / maxLinea) * ah : 0); }
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'gráfica combinada de barras y línea') + '">';
+
+  // rejilla + eje izquierdo (barras) y eje derecho (línea), cada uno con
+  // su color — asi la lectura no depende de recordar cual es cual.
+  for (var g = 0; g <= 3; g++) {
+    var y = mS + ah - (ah * g / 3);
+    s += '<line x1="' + mI + '" y1="' + y + '" x2="' + (W - mD) + '" y2="' + y +
+      '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (mI - 7) + '" y="' + (y + 3.5) + '" text-anchor="end" ' +
+      'font-size="9.5" fill="' + colorBarra + '">' + fEjeBarra(maxBarra * g / 3) + '</text>';
+    s += '<text x="' + (W - mD + 7) + '" y="' + (y + 3.5) + '" text-anchor="start" ' +
+      'font-size="9.5" fill="' + colorLinea + '">' + fEjeLinea(maxLinea * g / 3) + '</text>';
+  }
+
+  // barras (plata), ancladas a la base, extremo redondeado
+  datos.forEach(function (d, i) {
+    if (d.barra === null || d.barra === undefined) return;
+    var bh = maxBarra ? (d.barra / maxBarra) * ah : 0;
+    var x = px(i) - bw / 2;
+    var y = mS + ah - bh;
+    var r = Math.min(4, bw / 2, bh);
+    if (bh <= 0.5) {
+      s += '<rect x="' + x + '" y="' + (mS + ah - 1) + '" width="' + bw +
+        '" height="1" fill="' + colorBarra + '" opacity=".35"/>';
+    } else {
+      s += '<path d="M' + x + ' ' + (mS + ah) +
+        ' L' + x + ' ' + (y + r) + ' Q' + x + ' ' + y + ' ' + (x + r) + ' ' + y +
+        ' L' + (x + bw - r) + ' ' + y +
+        ' Q' + (x + bw) + ' ' + y + ' ' + (x + bw) + ' ' + (y + r) +
+        ' L' + (x + bw) + ' ' + (mS + ah) + ' Z" fill="' + colorBarra + '" opacity=".85"/>';
+    }
+  });
+
+  // meta de la linea: escalon punteado
+  if (opt.metaLinea !== undefined && opt.metaLinea !== null) {
+    var yM = pyL(opt.metaLinea);
+    s += '<line x1="' + mI + '" y1="' + yM + '" x2="' + (W - mD) + '" y2="' + yM +
+      '" stroke="' + colorMeta + '" stroke-width="2" stroke-dasharray="5 3"/>';
+    s += '<text x="' + mI + '" y="' + (yM - 4) + '" font-size="9.5" font-weight="700" ' +
+      'fill="' + colorMeta + '">' + esc(opt.metaLineaEtq || 'meta') + '</text>';
+  }
+
+  // corte de regimen
+  if (opt.corte) {
+    for (var ci = 0; ci < n; ci++) {
+      if (String(datos[ci].x) !== String(opt.corte)) continue;
+      var cx = px(ci) - paso / 2;
+      // Solo la marca vertical, SIN texto encima — con dos ejes y una
+      // meta ya hay demasiadas etiquetas peleando por el mismo espacio.
+      // La explicación de qué es este corte va en la lectura de abajo.
+      s += '<line x1="' + cx + '" y1="' + mS + '" x2="' + cx + '" y2="' + (mS + ah) +
+        '" stroke="var(--texto-3)" stroke-width="1.5" stroke-dasharray="4 3"/>';
+      break;
+    }
+  }
+
+  // linea (tasa de firma), solo entre puntos con dato
+  var pts = '', trazando = false;
+  datos.forEach(function (d, i) {
+    if (d.linea === null || d.linea === undefined) { trazando = false; return; }
+    pts += (trazando ? ' L' : ' M') + px(i) + ' ' + pyL(d.linea);
+    trazando = true;
+  });
+  s += '<path d="' + pts + '" fill="none" stroke="' + colorLinea +
+    '" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+  datos.forEach(function (d, i) {
+    if (d.linea === null || d.linea === undefined) return;
+    s += '<circle cx="' + px(i) + '" cy="' + pyL(d.linea) + '" r="3.5" fill="' + colorLinea +
+      '" stroke="var(--superficie)" stroke-width="1.5"/>';
+  });
+
+  s += '<line x1="' + mI + '" y1="' + (mS + ah) + '" x2="' + (W - mD) + '" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+
+  var cada = Math.ceil(n / 12);
+  datos.forEach(function (d, i) {
+    if (i % cada !== 0 && i !== n - 1) return;
+    s += '<text x="' + px(i) + '" y="' + (H - 8) + '" text-anchor="middle" font-size="9.5" ' +
+      'fill="var(--texto-3)">' + esc(etiquetaX(d.x, opt.gran)) + '</text>';
+  });
+
+  datos.forEach(function (d, i) {
+    s += '<rect class="hit" data-i="' + i + '" x="' + (mI + i * paso) + '" y="' + mS +
+      '" width="' + paso + '" height="' + ah + '" fill="transparent"/>';
+  });
+
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.hit').forEach(function (h) {
+    h.addEventListener('mouseenter', function () {
+      var i = Number(h.getAttribute('data-i'));
+      var d = datos[i];
+      var rect = svg.getBoundingClientRect();
+      var esc2 = rect.width / W;
+      var filas = opt.detalle ? opt.detalle(d) : [
+        { nombre: opt.nombreLinea || 'Línea',
+          valor: d.linea === null || d.linea === undefined ? 'sin dato' : fEjeLinea(d.linea),
+          color: colorLinea },
+        { nombre: opt.nombreBarra || 'Barra',
+          valor: d.barra === null || d.barra === undefined ? 'sin dato' : (opt.formatoBarra || fEjeBarra)(d.barra),
+          color: colorBarra }
+      ];
+      tt.mostrar(px(i) * esc2, mS * esc2, tooltipHTML(etiquetaX(d.x, opt.gran), filas));
+    });
+    h.addEventListener('mouseleave', tt.ocultar);
+  });
+}
+
+/** Barras horizontales con etiqueta directa. Una medida, ordenadas. */
+function chBarrasH(cont, datos, opt) {
+  opt = opt || {};
+  if (!datos || !datos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin datos') + '</div>';
+    return;
+  }
+  var filaH = 26, mS = 6, mB = 4;
+  var mI = opt.anchoEtiqueta || 128, mD = 62;
+  var H = mS + datos.length * filaH + mB;
+  var aw = W - mI - mD;
+  var max = Math.max.apply(null, datos.map(function (d) { return Math.abs(d.y); })) || 1;
+  var color = opt.color || 'var(--s1)';
+  var fv = opt.formato || fNum;
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'gráfica de barras horizontales') + '">';
+  datos.forEach(function (d, i) {
+    var y = mS + i * filaH;
+    var bh = 13;
+    var bw = Math.max(1, (Math.abs(d.y) / max) * aw);
+    var by = y + (filaH - bh) / 2;
+    var r = Math.min(4, bh / 2, bw);
+    s += '<text x="' + (mI - 9) + '" y="' + (by + bh / 2 + 3.5) +
+      '" text-anchor="end" font-size="11" fill="var(--texto-2)">' +
+      esc(String(d.etiqueta).substring(0, opt.maxEtiqueta || 24)) + '</text>';
+    s += '<path d="M' + mI + ' ' + by +
+      ' L' + (mI + bw - r) + ' ' + by +
+      ' Q' + (mI + bw) + ' ' + by + ' ' + (mI + bw) + ' ' + (by + r) +
+      ' L' + (mI + bw) + ' ' + (by + bh - r) +
+      ' Q' + (mI + bw) + ' ' + (by + bh) + ' ' + (mI + bw - r) + ' ' + (by + bh) +
+      ' L' + mI + ' ' + (by + bh) + ' Z" fill="' + color + '"/>';
+    // etiqueta directa: aquí sí, porque son pocas filas
+    s += '<text x="' + (mI + bw + 7) + '" y="' + (by + bh / 2 + 3.5) +
+      '" font-size="11" font-weight="700" fill="var(--texto-2)">' + esc(fv(d.y)) + '</text>';
+    s += '<rect class="hit" data-i="' + i + '" x="' + mI + '" y="' + y + '" width="' + aw +
+      '" height="' + filaH + '" fill="transparent"/>';
+  });
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  if (opt.detalle) {
+    var tt = montarTooltip(cont);
+    var svg = cont.querySelector('svg');
+    svg.querySelectorAll('.hit').forEach(function (h) {
+      h.addEventListener('mouseenter', function () {
+        var d = datos[Number(h.getAttribute('data-i'))];
+        var rect = svg.getBoundingClientRect();
+        var e2 = rect.width / W;
+        tt.mostrar(rect.width / 2,
+          (mS + Number(h.getAttribute('data-i')) * filaH) * e2,
+          tooltipHTML(d.etiqueta, opt.detalle(d)));
+      });
+      h.addEventListener('mouseleave', tt.ocultar);
+    });
+  }
+}
+
+/** Barras agrupadas, hasta 4 series. Leyenda obligatoria. */
+function chGrupos(cont, cats, series, opt) {
+  opt = opt || {};
+  if (!cats || !cats.length) {
+    cont.innerHTML = '<div class="vacio-graf">' + esc(opt.vacio || 'Sin datos') + '</div>';
+    return;
+  }
+  var H = opt.alto || 200;
+  var mI = 46, mD = 10, mS = 12, mB = 26;
+  var aw = W - mI - mD, ah = H - mS - mB;
+  var max = 0;
+  series.forEach(function (se) {
+    se.valores.forEach(function (v) { if (v > max) max = v; });
+  });
+  max = ejeMax(max);
+  var nc = cats.length, ns = series.length;
+  var paso = aw / nc;
+  var grupo = Math.min(paso - 6, 40);
+  var bw = Math.max(2.5, (grupo - (ns - 1) * 2) / ns);      // 2px entre barras
+  var fEje = opt.formatoEje || fCompacto;
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'barras agrupadas') + '">';
+  for (var g = 0; g <= 3; g++) {
+    var vy = max * g / 3;
+    var y = mS + ah - (vy / max) * ah;
+    s += '<line x1="' + mI + '" y1="' + y + '" x2="' + (W - mD) + '" y2="' + y +
+      '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (mI - 7) + '" y="' + (y + 3.5) +
+      '" text-anchor="end" font-size="9.5" fill="var(--texto-3)">' + fEje(vy) + '</text>';
+  }
+
+  cats.forEach(function (c, i) {
+    var x0 = mI + i * paso + (paso - grupo) / 2;
+    series.forEach(function (se, j) {
+      var v = se.valores[i] || 0;
+      var bh = max ? (v / max) * ah : 0;
+      var x = x0 + j * (bw + 2);
+      var y = mS + ah - bh;
+      var r = Math.min(4, bw / 2, bh);
+      if (bh > 0.5) {
+        s += '<path d="M' + x + ' ' + (mS + ah) +
+          ' L' + x + ' ' + (y + r) + ' Q' + x + ' ' + y + ' ' + (x + r) + ' ' + y +
+          ' L' + (x + bw - r) + ' ' + y +
+          ' Q' + (x + bw) + ' ' + y + ' ' + (x + bw) + ' ' + (y + r) +
+          ' L' + (x + bw) + ' ' + (mS + ah) + ' Z" fill="' + se.color + '"/>';
+      }
+    });
+    s += '<rect class="hit" data-i="' + i + '" x="' + (mI + i * paso) + '" y="' + mS +
+      '" width="' + paso + '" height="' + ah + '" fill="transparent"/>';
+  });
+
+  s += '<line x1="' + mI + '" y1="' + (mS + ah) + '" x2="' + (W - mD) + '" y2="' + (mS + ah) +
+    '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+  var cada = Math.ceil(nc / 12);
+  cats.forEach(function (c, i) {
+    if (i % cada !== 0 && i !== nc - 1) return;
+    s += '<text x="' + (mI + i * paso + paso / 2) + '" y="' + (H - 8) +
+      '" text-anchor="middle" font-size="9.5" fill="var(--texto-3)">' +
+      esc(etiquetaX(c, opt.gran)) + '</text>';
+  });
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.hit').forEach(function (h) {
+    h.addEventListener('mouseenter', function () {
+      var i = Number(h.getAttribute('data-i'));
+      var rect = svg.getBoundingClientRect();
+      var e2 = rect.width / W;
+      tt.mostrar((mI + i * paso + paso / 2) * e2, mS * e2,
+        tooltipHTML(etiquetaX(cats[i], opt.gran), series.map(function (se) {
+          return { nombre: se.nombre, color: se.color,
+                   valor: (opt.formato || fNum)(se.valores[i] || 0) };
+        })));
+    });
+    h.addEventListener('mouseleave', tt.ocultar);
+  });
+}
+
+function leyenda(series) {
+  return '<div class="leyenda">' + series.map(function (se) {
+    return '<span><i style="background:' + se.color + '"></i>' + esc(se.nombre) + '</span>';
+  }).join('') + '</div>';
+}
+
+/* =====================================================================
+   Componentes de UI
+   ===================================================================== */
+
+/** Badge informativo de una tarjeta. El texto completo va en title:
+    si no, una nota larga descuadra la altura de toda la fila de KPIs. */
+
+/* Version C-Level: la tarjeta no lleva parrafo adentro. La nota deja de
+   ser un badge visible y pasa al title de la tarjeta, asi que el dato flojo
+   sigue trazable al pasar el mouse pero no compite con el numero. */
+function tarjetaKPI(k) {
+  var ayuda = k.notaLarga || k.nota || '';
+  var h = '<div class="kpi" data-color="' + esc(k.color) + '"' +
+    (ayuda ? ' title="' + esc(ayuda) + '"' : '') + '>';
+  h += '<div class="kpi-label">' + esc(k.label) + '</div>';
+  if (k.pendiente || k.valor === null || k.valor === undefined) {
+    h += '<div class="kpi-valor vacio">--</div>';
+  } else {
+    var exacto = (k.formato === 'copC') ? fCop(k.valor)
+      : (k.formato === 'cop' ? fCop(k.valor) : fNum(k.valor));
+    h += '<div class="kpi-valor" title="' + esc(exacto) + '">' +
+      esc(fmt(k.valor, k.formato)) + '</div>';
+  }
+  if (k.sublabel) h += '<div class="kpi-sub">' + esc(k.sublabel) + '</div>';
+
+  if (k.pendiente) {
+    h += '<span class="foto">sin dato todavía</span>';
+  } else if (k.delta === null || k.delta === undefined) {
+    h += '<span class="foto">foto de hoy · sin comparativo</span>';
+  } else {
+    // Para CPL menos es mejor: se invierte el color, no el signo.
+    var bueno = k.deltaInvertido ? (k.delta < 0) : (k.delta > 0);
+    var cls = k.delta === 0 ? 'plano' : (bueno ? 'sube' : 'baja');
+    var flecha = k.delta === 0 ? '=' : (k.delta > 0 ? '▲' : '▼');
+    // Si el KPI ya es un porcentaje, la variacion va en puntos: un "% de %"
+    // es ilegible y se malinterpreta siempre.
+    var unidad = k.deltaEnPuntos ? ' pp' : '%';
+    var contra = k.deltaEtiqueta || 'vs per. anterior';
+    h += '<div class="delta ' + cls + '">' + flecha + ' ' +
+      (k.delta > 0 ? '+' : '') + fNum(k.delta) + unidad +
+      ' <small>' + esc(contra) + '</small></div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function filaKPIs(lista) {
+  if (!lista || !lista.length) return '';
+  return '<div class="kpis">' + lista.map(tarjetaKPI).join('') + '</div>';
+}
+
+function panel(titulo, sub, cuerpo, id) {
+  return '<div class="panel">' +
+    '<h3>' + esc(titulo) + '</h3>' +
+    (sub ? '<p class="sub">' + esc(sub) + '</p>' : '') +
+    (id ? '<div class="grafica" id="' + id + '"></div>' : '') +
+    (cuerpo || '') + '</div>';
+}
+
+function avisoBox(txt, obra) {
+  if (!txt) return '';
+  return '<div class="aviso' + (obra ? ' obra' : '') + '">' +
+    '<span class="ico">' + (obra ? '🚧' : '⚠️') + '</span><div>' + esc(txt) + '</div></div>';
+}
+
+function cuali(t, fuente) {
+  if (!t) return '';
+  /* La fecha va visible a proposito: estos textos los escribe el equipo a
+     mano y se desincronizan de los KPIs. El de F4 llego a decir 170 firmas
+     donde la tarjeta decia 52. Si la fecha esta vieja, hay que releerlos. */
+  return '<h2 class="sec">Lectura del frente</h2>' +
+    (t.fecha ? '<p class="sec-sub">escrito el ' + esc(t.fecha) + '</p>' : '') +
+    '<div class="cuali">' +
+    '<div class="caja bien"><h4>✅ Lo que está funcionando</h4><p>' +
+      esc(t.funcionando || '(por escribir)') + '</p></div>' +
+    '<div class="caja cuello"><h4>⚠️ Cuello de botella</h4><p>' +
+      esc(t.cuello || '(por escribir)') + '</p></div>' +
+    '<div class="caja ojo"><h4>🔔 Atención esta semana</h4><p>' +
+      esc(t.atencion || '(por escribir)') + '</p></div>' +
+    '</div>';
+}
+
+/** Tabla genérica. cols: [{k, t, f, txt, pill}] */
+function tabla(cols, filas, opt) {
+  opt = opt || {};
+  if (!filas || !filas.length) {
+    return '<div class="vacio-graf">' + esc(opt.vacio || 'Sin filas en el período') + '</div>';
+  }
+  var h = '<div class="tabla-wrap"><table class="t"><thead><tr>';
+  cols.forEach(function (c) { h += '<th>' + esc(c.t) + '</th>'; });
+  h += '</tr></thead><tbody>';
+  filas.forEach(function (r) {
+    h += '<tr>';
+    cols.forEach(function (c) {
+      var v = r[c.k];
+      var cls = c.txt ? ' class="txt"' : '';
+      var txt;
+      if (v === '' || v === null || v === undefined) {
+        txt = '<span class="cel-vacia">--</span>';
+      } else if (c.pill) {
+        var p = String(v).toLowerCase();
+        txt = '<span class="pill ' + esc(p) + '">' + esc(v) + '</span>';
+      } else if (c.f === 'cop') {
+        txt = esc(fCopC(v));
+      } else if (c.f === 'pct') {
+        txt = esc(fPct(v));
+      } else if (c.f === 'pctBar') {
+        // % cumplido + barra, en la misma celda — igual semántica de color
+        // que claseCumplimiento_/.meta-grande-fill, en formato angosto.
+        var clsB = claseCumplimiento_(v);
+        var w = Math.max(0, Math.min(100, v));
+        txt = '<span class="tabla-pct-cifra ' + clsB + '">' + esc(fPct(v)) + '</span>' +
+          '<div class="tabla-pct-pista"><div class="tabla-pct-fill ' + clsB +
+          '" style="width:' + w + '%"></div></div>';
+      } else if (c.f === 'delta') {
+        txt = deltaCel(v, c.invertido, c.puntos);
+      } else if (c.f === 'txt') {
+        txt = esc(v);
+      } else {
+        txt = esc(fNum(v));
+      }
+      h += '<td' + cls + '>' + txt + '</td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  return h;
+}
+
+/* Dona de parte-sobre-total. Es el unico caso en que una torta gana a unas
+   barras: tres o cuatro categorias que suman un todo con significado, y el
+   todo va al centro. Con mas categorias o sin un total que signifique algo,
+   volver a chBarrasH. */
+function chTorta(cont, datos, opt) {
+  opt = opt || {};
+  var vivos = (datos || []).filter(function (d) { return Number(d.y) > 0; });
+  if (!vivos.length) {
+    cont.innerHTML = '<div class="vacio-graf">' + esc(opt.vacio || 'Sin datos') + '</div>';
+    return;
+  }
+  var H = opt.alto || 230;
+  var total = vivos.reduce(function (a, d) { return a + Number(d.y); }, 0);
+  var cx = H / 2 + 6, cy = H / 2, R = H / 2 - 16, r = R * 0.58;
+  var fv = opt.formato || fNum;
+
+  function punto(ang, rad) {
+    var a = (ang - 90) * Math.PI / 180;
+    return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+  }
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'dona de composición') + '">';
+  var ang = 0;
+  vivos.forEach(function (d, i) {
+    var frac = Number(d.y) / total;
+    var barrido = frac * 360;
+    // Una sola categoria: el anillo completo no se puede dibujar con un arco,
+    // se pinta como circulo.
+    if (frac >= 0.9999) {
+      s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + ((R + r) / 2) +
+        '" fill="none" stroke="' + d.color + '" stroke-width="' + (R - r) + '"/>';
+    } else {
+      var a0 = ang, a1 = ang + barrido;
+      var p0 = punto(a0, R), p1 = punto(a1, R);
+      var q1 = punto(a1, r), q0 = punto(a0, r);
+      var grande = barrido > 180 ? 1 : 0;
+      s += '<path d="M' + p0[0].toFixed(2) + ' ' + p0[1].toFixed(2) +
+        ' A' + R + ' ' + R + ' 0 ' + grande + ' 1 ' + p1[0].toFixed(2) + ' ' + p1[1].toFixed(2) +
+        ' L' + q1[0].toFixed(2) + ' ' + q1[1].toFixed(2) +
+        ' A' + r + ' ' + r + ' 0 ' + grande + ' 0 ' + q0[0].toFixed(2) + ' ' + q0[1].toFixed(2) +
+        ' Z" fill="' + d.color + '" stroke="var(--superficie)" stroke-width="2"' +
+        ' data-i="' + i + '" class="hit"/>';
+    }
+    ang += barrido;
+  });
+
+  // El total al centro: es la razon de ser de la dona.
+  s += '<text x="' + cx + '" y="' + (cy - 2) + '" text-anchor="middle" font-size="24" ' +
+    'font-weight="800" fill="var(--texto)">' + esc(fv(total)) + '</text>';
+  if (opt.centroSub) {
+    s += '<text x="' + cx + '" y="' + (cy + 16) + '" text-anchor="middle" font-size="10.5" ' +
+      'fill="var(--texto-3)">' + esc(opt.centroSub) + '</text>';
+  }
+
+  // Etiquetas directas a la derecha, en orden: identidad sin depender del color.
+  var lx = H + 24, ly = cy - (vivos.length - 1) * 13;
+  vivos.forEach(function (d) {
+    var pct = Math.round((Number(d.y) / total) * 1000) / 10;
+    s += '<rect x="' + lx + '" y="' + (ly - 8) + '" width="10" height="10" rx="3" fill="' +
+      d.color + '"/>';
+    s += '<text x="' + (lx + 17) + '" y="' + ly + '" font-size="12" fill="var(--texto-2)">' +
+      esc(d.etiqueta) + '</text>';
+    s += '<text x="' + (lx + 17) + '" y="' + (ly + 15) + '" font-size="12" font-weight="700" ' +
+      'fill="var(--texto)">' + esc(fv(d.y)) + '  <tspan fill="var(--texto-3)" ' +
+      'font-weight="400">' + esc(fPct(pct)) + '</tspan></text>';
+    ly += 38;
+  });
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  if (opt.detalle) {
+    var tt = montarTooltip(cont);
+    var svg = cont.querySelector('svg');
+    svg.querySelectorAll('.hit').forEach(function (hh) {
+      hh.addEventListener('mouseenter', function () {
+        var d = vivos[Number(hh.getAttribute('data-i'))];
+        var rect = svg.getBoundingClientRect();
+        tt.mostrar(rect.width / 2, H / 2, tooltipHTML(d.etiqueta, opt.detalle(d)));
+      });
+      hh.addEventListener('mouseleave', function () { tt.ocultar(); });
+    });
+  }
+}
+
+/* =====================================================================
+   Vistas
+   ===================================================================== */
+
+var graficas = [];        // se dibujan después de inyectar el HTML
+function pintar(id, fn) { graficas.push({ id: id, fn: fn }); }
+function dibujarPendientes() {
+  graficas.forEach(function (g) {
+    var el = document.getElementById(g.id);
+    if (el) g.fn(el);
+  });
+  graficas = [];
+}
+
+/* El tablero mide MARKETING. Hay dos alcances distintos y conviene que
+   se lean en pantalla, porque un frente que cubre toda la base no es un
+   error sino una intervencion de marketing sobre sedes que trajo otro. */
+function alcance(texto) {
+  return '<div class="badge info" style="margin:0 0 14px">' +
+    '<span class="ico-i">i</span><span>' + esc(texto) + '</span></div>';
+}
+
+/* Las tres tablas de cosecha, en formato matriz M0..M7.
+   Se separan a proposito: acumulada y viva contestan preguntas distintas
+   y divergen desde M2, asi que ponerlas juntas confunde mas que aclara. */
+/* La intensidad del color se calcula sobre el valor RELATIVO al tamano de
+   la cosecha, no sobre el valor absoluto. Si fuera absoluto, la cosecha de
+   octubre (1.922 sedes) tenriria todo de oscuro y las demas se verian
+   vacias, cuando proporcionalmente son mucho mas activas.
+   Devuelve 0..4, el paso de la rampa. */
+function pasoCalor(valor, n, tope) {
+  if (!n || !tope || valor === null || valor === undefined) return 0;
+  var r = (valor / n) / tope;              // 0..1
+  if (r <= 0) return 0;
+  if (r < 0.25) return 1;
+  if (r < 0.5) return 2;
+  if (r < 0.75) return 3;
+  return 4;
+}
+
+/* Cosechas con menos sedes que esto no se pintan ni fijan la escala: con
+   6 u 8 sedes, que una firme ya es 16% y se ve tan intenso como una
+   cosecha de 80 con 13 firmas. Es ruido, no desempeno. */
+var MIN_COSECHA = 20;
+
+/* Tope de la escala: el maximo de valor-por-sede, ignorando las cosechas
+   de muestra baja. Asi el color es comparable entre cosechas de verdad,
+   que es justo lo que uno quiere mirar en una tabla de cohortes. */
+function topePorSede(filas) {
+  var max = 0;
+  (filas || []).forEach(function (f) {
+    if (!f.n || f.n < MIN_COSECHA) return;
+    (f.celdas || []).forEach(function (c) {
+      if (c === null || c === undefined) return;
+      var v = c / f.n;
+      if (v > max) max = v;
+    });
+  });
+  return max;
+}
+
+function leyendaCalor(clase, etiqueta) {
+  var pasos = '';
+  for (var i = 0; i <= 4; i++) {
+    pasos += '<i class="hm-' + clase + '-' + i + '"></i>';
+  }
+  return '<div class="hm-leyenda"><span>menos</span>' +
+    '<span class="pasos">' + pasos + '</span><span>más</span>' +
+    '<span style="margin-left:6px">' + esc(etiqueta) + '</span></div>';
+}
+
+/* Sankey de dos columnas: de qué venía cada paciente y a qué se fue.
+   Se agregó para F8 (segundos créditos, 28-sep-2026): la pregunta es de
+   cross-selling — cuántos repiten en la misma especialidad y cuántos cruzan
+   a otra. Una tabla de pares no deja ver el cruce de un golpe; el ancho de
+   la banda sí.
+
+   rutas: [{origen, destino, n, monto}]. El color lo pone el nodo de ORIGEN,
+   no el de destino, porque la lectura natural es "de dónde salieron".
+   La banda diagonal (origen === destino) va en gris a propósito: es el caso
+   "se quedó donde estaba", y pintarla de color compite visualmente con los
+   cruces, que son lo único accionable de esta gráfica. */
+function chSankey(cont, rutas, opt) {
+  opt = opt || {};
+  if (!rutas || !rutas.length) {
+    cont.innerHTML = '<div class="vacio-graf">' +
+      esc(opt.vacio || 'Sin rutas en el período seleccionado') + '</div>';
+    return;
+  }
+
+  // Nodos de cada lado con su total. Se ordenan por volumen para que las
+  // bandas gruesas queden arriba y se crucen lo menos posible.
+  function nodos(campo) {
+    var m = {};
+    rutas.forEach(function (r) { m[r[campo]] = (m[r[campo]] || 0) + r.n; });
+    return Object.keys(m).map(function (k) { return { nombre: k, total: m[k] }; })
+      .sort(function (a, b) { return b.total - a.total; });
+  }
+  var izq = nodos('origen'), der = nodos('destino');
+  var totalN = 0;
+  rutas.forEach(function (r) { totalN += r.n; });
+
+  var mI = 152, mD = 152, mS = 10, mB = 10;
+  var nodoW = 13;
+  var gap = 7;
+  // El alto lo manda el lado con más nodos: cada nodo necesita al menos
+  // espacio para su etiqueta, si no los textos se pisan entre sí.
+  var filas = Math.max(izq.length, der.length);
+  var H = opt.alto || Math.max(180, filas * 34 + mS + mB);
+  var ah = H - mS - mB;
+  var xL = mI, xR = W - mD - nodoW;
+
+  // Escala: el alto útil menos los espacios entre nodos, repartido por
+  // pacientes. Se calcula por lado porque los dos suman el mismo total.
+  function disponer(lista) {
+    var huecos = (lista.length - 1) * gap;
+    var esc_ = totalN > 0 ? (ah - huecos) / totalN : 0;
+    var y = mS, pos = {};
+    lista.forEach(function (nd) {
+      var alto = Math.max(2, nd.total * esc_);
+      pos[nd.nombre] = { y: y, alto: alto, cursor: y, total: nd.total };
+      y += alto + gap;
+    });
+    return pos;
+  }
+  var pL = disponer(izq), pD = disponer(der);
+
+  var colorDe = {};
+  izq.forEach(function (nd, i) { colorDe[nd.nombre] = serieColor(i); });
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'rutas de especialidad entre el primer y el segundo crédito') + '">';
+
+  // Bandas primero, para que los nodos y las etiquetas queden por encima.
+  var bandas = rutas.slice().sort(function (a, b) { return b.n - a.n; });
+  bandas.forEach(function (r, i) {
+    var a = pL[r.origen], b = pD[r.destino];
+    if (!a || !b) return;
+    var esc_ = totalN > 0 ? (ah - Math.max(0, (izq.length - 1)) * gap) / totalN : 0;
+    var escD = totalN > 0 ? (ah - Math.max(0, (der.length - 1)) * gap) / totalN : 0;
+    var gr1 = Math.max(1.5, r.n * esc_), gr2 = Math.max(1.5, r.n * escD);
+    var y1 = a.cursor, y2 = b.cursor;
+    a.cursor += gr1; b.cursor += gr2;
+    var x1 = xL + nodoW, x2 = xR;
+    var cx = (x1 + x2) / 2;
+    var mismo = r.origen === r.destino;
+    var col = mismo ? 'var(--texto-3)' : colorDe[r.origen];
+    // Cinta cerrada: borde de arriba de ida, borde de abajo de vuelta.
+    var d = 'M' + x1 + ' ' + y1 +
+      ' C' + cx + ' ' + y1 + ' ' + cx + ' ' + y2 + ' ' + x2 + ' ' + y2 +
+      ' L' + x2 + ' ' + (y2 + gr2) +
+      ' C' + cx + ' ' + (y2 + gr2) + ' ' + cx + ' ' + (y1 + gr1) + ' ' + x1 + ' ' + (y1 + gr1) +
+      ' Z';
+    s += '<path class="sk-banda" data-i="' + i + '" d="' + d + '" fill="' + col +
+      '" fill-opacity="' + (mismo ? '.22' : '.42') + '" stroke="none"/>';
+  });
+
+  function pintarNodos(lista, pos, x, anclaTexto, xTexto) {
+    lista.forEach(function (nd) {
+      var p = pos[nd.nombre];
+      s += '<rect x="' + x + '" y="' + p.y + '" width="' + nodoW + '" height="' + p.alto +
+        '" rx="2" fill="' + (colorDe[nd.nombre] || 'var(--texto-3)') + '" fill-opacity=".85"/>';
+      var yT = p.y + p.alto / 2 + 3.5;
+      var nombre = nd.nombre.length > 24 ? nd.nombre.substring(0, 23) + '…' : nd.nombre;
+      s += '<text x="' + xTexto + '" y="' + yT + '" text-anchor="' + anclaTexto +
+        '" font-size="10.5" fill="var(--texto-2)">' + esc(nombre) +
+        ' <tspan font-weight="700" fill="var(--texto-1)">' + nd.total + '</tspan></text>';
+    });
+  }
+  pintarNodos(izq, pL, xL, 'end', xL - 8);
+  pintarNodos(der, pD, xR, 'start', xR + nodoW + 8);
+
+  s += '<text x="' + (xL + nodoW) + '" y="' + (H - 1) + '" text-anchor="end" font-size="9" ' +
+    'fill="var(--texto-3)">' + esc(opt.etqIzq || '1er crédito') + '</text>';
+  s += '<text x="' + xR + '" y="' + (H - 1) + '" font-size="9" ' +
+    'fill="var(--texto-3)">' + esc(opt.etqDer || '2º crédito') + '</text>';
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.sk-banda').forEach(function (el) {
+    el.style.cursor = 'pointer';
+    el.addEventListener('mousemove', function (e) {
+      var r = bandas[Number(el.getAttribute('data-i'))];
+      var rect = svg.getBoundingClientRect();
+      el.setAttribute('fill-opacity', '.75');
+      tt.mostrar(e.clientX - rect.left, e.clientY - rect.top,
+        tooltipHTML(r.origen + ' → ' + r.destino, [
+          { nombre: r.origen === r.destino ? 'Repitieron especialidad' : 'Cruzaron de especialidad',
+            valor: fNum(r.n) + (r.n === 1 ? ' paciente' : ' pacientes'),
+            color: r.origen === r.destino ? 'var(--texto-3)' : colorDe[r.origen] },
+          // "solicitada", no "desembolsada": la banda agrupa TODAS las
+          // solicitudes de esa ruta, aprobadas o no, no solo las que salieron.
+          { nombre: 'Monto solicitado', valor: fCop(r.monto || 0), color: 'var(--texto-3)' }
+        ]));
+    });
+    el.addEventListener('mouseleave', function () {
+      var r = bandas[Number(el.getAttribute('data-i'))];
+      el.setAttribute('fill-opacity', r.origen === r.destino ? '.22' : '.42');
+      tt.ocultar();
+    });
+  });
+}
+
+function tablaCohorte(filas, offsets, formato, titulo, sub, clase, etiquetaEscala, colN, pctCelda) {
+  if (!filas || !filas.length) return '';
+  var tope = topePorSede(filas);
+  // "Deals totales" es opcional: solo la trae la tabla de deals (nTotal
+  // definido); la de sedes/cosechas no la usa y no gana columna.
+  var conTotal = filas.some(function (f) { return f.nTotal !== undefined; });
+  var h = '<div class="panel"><h3>' + esc(titulo) + '</h3>' +
+    '<p class="sub">' + esc(sub) + '</p><div class="tabla-wrap">' +
+    '<table class="t"><thead><tr><th>Cosecha</th>' +
+    (conTotal ? '<th>Deals totales</th>' : '') +
+    '<th>' + esc(colN || 'Sedes') + '</th>';
+  for (var m = 0; m <= offsets; m++) h += '<th>M' + m + '</th>';
+  h += '</tr></thead><tbody>';
+  var hayBajas = false;
+  filas.forEach(function (f) {
+    var baja = !f.n || f.n < MIN_COSECHA;
+    if (baja) hayBajas = true;
+    h += '<tr><td>' + esc(f.cosecha) +
+      (baja ? ' <span class="cel-vacia" style="font-size:10px">muestra baja</span>' : '') +
+      '</td>' +
+      (conTotal ? '<td>' + fNum(f.nTotal) + '</td>' : '') +
+      '<td>' + fNum(f.n) + '</td>';
+    (f.celdas || []).forEach(function (c) {
+      // null = mes que todavia no ocurrio. Se deja vacio, no en cero.
+      if (c === null || c === undefined) {
+        h += '<td class="cel-vacia">·</td>';
+        return;
+      }
+      // Las cosechas de muestra baja van sin color: pintarlas sugiere una
+      // intensidad que el tamano de la muestra no sostiene.
+      // El % del total de la cosecha: es EXACTAMENTE lo que define la
+      // intensidad del color, asi que escribirlo hace legible el mapa en vez
+      // de obligar a estimar el tono.
+      var pc = f.n ? Math.round((c / f.n) * 1000) / 10 : 0;
+      var extra = pctCelda
+        ? '<span class="cel-pct">' + esc(fPct(pc)) + '</span>' : '';
+      if (baja) {
+        h += '<td class="cel-vacia">' + esc(formato(c)) + extra + '</td>';
+        return;
+      }
+      var paso = pasoCalor(c, f.n, tope);
+      var porSede = c / f.n;
+      var titulo2 = f.cosecha + ' · ' + formato(c) + ' de ' + fNum(f.n) +
+        ' (' + fPct(pc) + ')';
+      h += '<td class="hm hm-' + clase + '-' + paso + '" title="' + esc(titulo2) + '">' +
+        esc(formato(c)) + extra + '</td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>' +
+    leyendaCalor(clase, etiquetaEscala || 'intensidad por sede de la cosecha') +
+    (hayBajas
+      ? '<p class="sub" style="margin:6px 0 0">Las cosechas con menos de ' +
+        MIN_COSECHA + ' sedes van en gris y no entran en la escala: con esa ' +
+        'muestra, una sola firma mueve el porcentaje demasiado.</p>'
+      : '') +
+    '</div>';
+  return h;
+}
+
+
+/* Granularidad de la pauta: el usuario elige dia o mes sin recargar. Con un
+   rango de un mes, "por mes" da una sola barra; con dos meses, dos. El
+   estado vive aca porque no depende del servidor: la serie diaria ya viene
+   y el mes se agrega en el cliente. */
+var GRAN_PAUTA = 'dia';
+function setGranPauta(g) {
+  GRAN_PAUTA = g;
+  if (D) render();
+}
+
+/** Agrupa una serie diaria por mes sumando, o la devuelve tal cual. */
+function serieSegunGran(serie, campo) {
+  var pts = (serie || []).map(function (p) {
+    return { x: p.x, y: p[campo], leads: p.leads, gasto: p.gasto };
+  });
+  if (GRAN_PAUTA !== 'mes') return pts;
+  var ag = {};
+  (serie || []).forEach(function (p) {
+    var m = String(p.x).substring(0, 7);
+    if (!ag[m]) ag[m] = { x: m, leads: 0, gasto: 0 };
+    ag[m].leads += Number(p.leads || 0);
+    ag[m].gasto += Number(p.gasto || 0);
+  });
+  return Object.keys(ag).sort().map(function (m) {
+    var b = ag[m];
+    // El CPL de un mes es gasto/leads del mes, NO el promedio de los CPL
+    // diarios: promediar razones da un numero que no existe.
+    b.cpl = b.leads ? Math.round(b.gasto / b.leads) : 0;
+    b.y = b[campo];
+    return b;
+  });
+}
+
+function botonesGran(id) {
+  return '<div class="gran-sel" data-gran="' + id + '">' +
+    '<button type="button" data-g="dia" aria-pressed="' +
+      (GRAN_PAUTA === 'dia' ? 'true' : 'false') + '">Día</button>' +
+    '<button type="button" data-g="mes" aria-pressed="' +
+      (GRAN_PAUTA === 'mes' ? 'true' : 'false') + '">Mes</button>' +
+    '</div>';
+}
+
+function panelGraf(titulo, sub, idGraf) {
+  return '<div class="panel">' +
+    '<div class="panel-head"><div>' +
+    '<h3>' + esc(titulo) + '</h3>' +
+    '<p class="sub" style="margin:0">' + esc(sub) + '</p>' +
+    '</div></div>' +
+    '<div class="grafica" id="' + idGraf + '"></div></div>';
+}
+
+function panelGran(titulo, sub, id, idGraf) {
+  return '<div class="panel">' +
+    '<div class="panel-head"><div>' +
+    '<h3>' + esc(titulo) + '</h3>' +
+    '<p class="sub" style="margin:0">' + esc(sub) + '</p>' +
+    '</div>' + botonesGran(id) + '</div>' +
+    '<div class="grafica" id="' + idGraf + '"></div></div>';
+}
+
+/* Selector de pipeline para "Los deals que entraron": LOCAL a la pestaña,
+   no al filtro global — HubSpot tiene 9 pipelines de deals mezclados en la
+   misma fuente (Farmer, B2B Distribuidores, Alianzas, Bot...) y son
+   procesos de negocio distintos a la adquisicion. Cada pipeline ya llega
+   pre-agregado del servidor, asi que el clic solo cambia que tabla se
+   pinta — sin recargar el tablero. */
+var F1_PIPE = { nombre: null };   // null = "Todos los pipelines"
+
+function f1PipeSetSel(nombre) {
+  F1_PIPE.nombre = nombre || null;
+  document.querySelectorAll('#f1PipeSel .tl-btn').forEach(function (b) {
+    b.classList.toggle('activo', (b.getAttribute('data-p') || null) === F1_PIPE.nombre);
+  });
+  f1PipeRender();
+}
+
+function f1PipeRender() {
+  var dc = ((D.f1 || {}).dealsCohorte) || {};
+  var cont = document.getElementById('f1PipeCuerpo');
+  if (!cont) return;
+  var filas = F1_PIPE.nombre && dc.porPipeline && dc.porPipeline[F1_PIPE.nombre]
+    ? dc.porPipeline[F1_PIPE.nombre] : (dc.filas || []);
+  cont.innerHTML = tablaCohorte(filas, dc.offsets, fNum,
+    'Deals ganados · acumulado',
+    'De los deals que entraron ese mes, cuántos ya están en cierre ganado al mes N. ' +
+    'Solo sube.',
+    'acum', '% del mes que ya cerró ganado', 'Deals', true);
+}
+
+function panelPipelineDeals_(dc) {
+  var pipes = dc.pipelines || [];
+  var h = '';
+  if (pipes.length > 1) {
+    h += '<div class="tl-cab" style="margin-bottom:8px">' +
+      '<div class="tl-grupo" id="f1PipeSel">' +
+      '<button class="tl-btn' + (F1_PIPE.nombre === null ? ' activo' : '') +
+      '" onclick="f1PipeSetSel(null)">Todos los pipelines</button>' +
+      pipes.map(function (p) {
+        return '<button class="tl-btn' + (F1_PIPE.nombre === p.nombre ? ' activo' : '') +
+          '" data-p="' + esc(p.nombre) + '" onclick="f1PipeSetSel(\'' +
+          esc(p.nombre).replace(/'/g, "\\'") + '\')">' + esc(p.nombre) +
+          ' (' + fNum(p.deals) + ')</button>';
+      }).join('') + '</div></div>';
+  }
+  h += '<div id="f1PipeCuerpo"></div>';
+  pintar('f1PipeCuerpo', function () { f1PipeRender(); });
+  return h;
+}
+
+function vistaF1() {
+  var f = D.f1, g = D.meta.agrupacion;
+  var em = f.embudo || {};
+  var co = f.coberturaOrigen || {};
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 1</div>' +
+    '<h1>¿Estamos generando suficiente demanda, y a qué costo?</h1>' +
+    '<p class="lead">La cadena completa: metemos plata en pauta, entran clínicas al ' +
+    'pipeline, y esas clínicas generan solicitudes de crédito que terminan en desembolsos. ' +
+    'Tres eslabones, en ese orden.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  /* El equivalente de la tabla de cosechas pero un paso ANTES: en el
+     pipeline comercial, cuando todavia es un negocio y no una sede. Dice
+     cuantos deals entraron cada mes y cuantos se fueron cerrando ganados. */
+  var dc = f.dealsCohorte || {};
+  if (dc.hay && (dc.filas || []).length) {
+    h += '<h2 class="sec">1 · Los deals que entraron, ¿se cierran?</h2>' +
+      '<p class="sec-sub"' + (dc.notaRoles ? ' title="' + esc(dc.notaRoles) + '"' : '') +
+      '>negocios de HubSpot por mes de creación y cuántos llegaron a ' +
+      'cierre ganado · ' + esc(dc.universo || '') +
+      (dc.excluidoOrigen ? ' · fuera siempre: ' + esc(dc.excluidoOrigen) : '') +
+      (dc.excluidos ? ' · se excluyen los cerrados perdidos por ' +
+        esc(dc.excluidos) : '') + '</p>';
+    h += panelPipelineDeals_(dc);
+  }
+
+  // --- 2. Metas de marketing por canal ---------------------------------
+  // Puestas por Christian: leads contra la meta TOTAL del mes (no
+  // prorrateada — corregido 9-sep-2026 a pedido de Emmanuel: la pregunta es
+  // "de la meta de todo el mes, cuánto llevo a esta fecha", no "cuánto me
+  // tocaba hasta hoy") y, de esos leads, cuántos terminan en cierre ganado
+  // en una ventana FIJA de 3 meses desde hoy — esa ventana no se mueve con
+  // el filtro de fechas, el resto de la pestaña sí.
+  var mc = f.metasCanal || {};
+  if ((mc.leads || []).length) {
+    h += '<h2 class="sec">2 · Metas de marketing por canal</h2>' +
+      '<p class="sec-sub">"lead" = deal que entró al pipeline comercial · ' +
+      'meta del mes completo de ' + esc(etiquetaX(mc.mesMeta, 'mes')) +
+      ', cuánto llevo a la fecha elegida · ' +
+      esc(dc.universo || f.etiquetaSel || '') +
+      (dc.excluidoOrigen ? ' · fuera siempre: ' + esc(dc.excluidoOrigen) : '') +
+      // 24-sep-2026, pedido explicito de Emmanuel: esta tabla tiene que
+      // coincidir 100% con el filtro Pipeline+Origen+Fecha que se usa en
+      // HubSpot, asi que ya NO excluye por causal (a diferencia de la
+      // tabla de Vinculacion de abajo, que si la excluye).
+      ' · sin filtro de causal, coincide exacto con el conteo crudo de HubSpot' +
+      '</p>';
+    h += tabla([
+      { k: 'canal', t: 'Canal', f: 'txt', txt: true },
+      { k: 'actual', t: 'Leads del mes' },
+      { k: 'meta', t: 'Meta del mes' },
+      { k: 'pct', t: '% cumplido', f: 'pctBar' },
+      { k: 'delta', t: 'vs período anterior', f: 'delta' }
+    ], mc.leads.map(function (r) {
+      return { canal: r.canal, actual: r.actual,
+        meta: r.meta || null, pct: r.meta ? r.pct : null, delta: r.delta };
+    }));
+
+    h += '<h3 class="sub-sec" style="margin-top:16px">Vinculación de clínicas: ' +
+      'de los leads que llegaron, ¿cuántos cerraron ganado?</h3>' +
+      '<p class="sec-sub">últimos 3 meses corridos (' + esc(mc.ventanaVinculacion || '') +
+      ') · ventana fija, no se mueve con el filtro de fechas' +
+      // Esta SI sigue excluyendo por causal (a diferencia de la tabla de
+      // arriba, desde 24-sep-2026) — mezclar duplicados/SARLAFT-fallido en
+      // el denominador de un % de cierre deflactaria la tasa sin que
+      // signifique nada: esos registros nunca iban a convertir.
+      (dc.excluidos ? ' · "leads que llegaron" excluye los cerrados perdidos por ' +
+        esc(dc.excluidos) : '') +
+      '</p>';
+    h += tabla([
+      { k: 'canal', t: 'Canal', f: 'txt', txt: true },
+      { k: 'llegaron', t: 'Leads que llegaron' },
+      { k: 'cerrados', t: 'Cerrado ganado' },
+      { k: 'pct', t: '% cerrado ganado', f: 'pct' },
+      { k: 'meta', t: 'Meta (3 meses)', f: 'pct' },
+      { k: 'pctCumplido', t: '% cumplido', f: 'pctBar' },
+      { k: 'delta', t: 'vs 3 meses anteriores', f: 'delta', puntos: true }
+    ], mc.vinculacion);
+  }
+
+  if ((em.kpis || []).length) {
+    // El titulo no lleva el nombre del origen: la etiqueta viene en
+    // mayusculas del catalogo de HubSpot ("que trajo EVENTO") y se lee mal.
+    // El universo va en el subtitulo, que ya es explicito.
+  // --- 3. Cuántas clínicas nuevas, y cuántas las trajo marketing ------
+  if (f.shareKpi) {
+    var sm = f.shareMkt || {};
+    h += '<h2 class="sec">3 · ¿Cuántas sedes ganamos?</h2>' +
+      '<p class="sec-sub">sedes creadas cada mes en todo el negocio, y cuántas trajo ' +
+      'marketing</p>';
+    /* La tarjeta lleva el total arriba y el aporte de marketing destacado
+       debajo: el porcentaje es el titular del frente y tiene que leerse de
+       un golpe, sin buscarlo en una tabla. */
+    // Se inserta antes del ULTIMO </div>, que es el cierre de la tarjeta.
+    // Con replace() normal caeria en el primer </div> — el del label — y el
+    // bloque saldria arriba y heredando el estilo de la etiqueta.
+    var htmlKpi = tarjetaKPI(f.shareKpi);
+    var tarjeta = htmlKpi;
+    // El desglose solo va cuando el motor lo manda: con el filtro en
+    // marketing seria "100 de 100" y con el filtro en Farmer un cero.
+    if (f.shareMkt) {
+      var corte = htmlKpi.lastIndexOf('</div>');
+      tarjeta = htmlKpi.substring(0, corte) +
+        '<div class="kpi-parte">' +
+        '<span class="n">' + fNum(sm.sedes || 0) + '</span>' +
+        '<span class="pc">' + fPct(sm.pct || 0) + '</span>' +
+        '<span class="l">' + esc(sm.etiqueta || '') + '</span>' +
+        '</div>' + htmlKpi.substring(corte);
+    }
+    h += '<div class="grid2">' +
+      '<div class="kpis">' + tarjeta + '</div>' +
+      panel('Sedes nuevas por mes',
+        'total del negocio contra las que trajo marketing',
+        leyenda([{ nombre: 'Todos los orígenes', color: 'var(--s1)' },
+                 { nombre: 'Marketing', color: 'var(--s2)' }]), 'gF1Share') +
+      '</div>';
+    pintar('gF1Share', function (el) {
+      var sh = f.share || [];
+      chGrupos(el, sh.map(function (x) { return x.mes; }), [
+        { nombre: 'Todos los orígenes', color: 'var(--s1)',
+          valores: sh.map(function (x) { return x.todas; }) },
+        { nombre: 'Marketing', color: 'var(--s2)',
+          valores: sh.map(function (x) { return x.mktReal; }) }
+      ], { gran: 'mes', formato: fNum, alto: 200 });
+    });
+    if (f.shareLectura) h += '<div class="lectura">' + esc(f.shareLectura) + '</div>';
+  }
+
+  // --- 3. Las clínicas que entraron y de qué calidad ------------------
+  var cos = f.cosechas || [];
+  var comp = f.composicion || {};
+  h += '<h2 class="sec">4 · Las clínicas que entraron y de qué calidad</h2>' +
+    '<p class="sec-sub">la clasificación de aliado decide si la sede recibe gestión ' +
+    'dedicada</p>';
+  /* Dona en vez de barras: son cuatro clases que suman un todo con
+     significado (el universo elegido), y el total va al centro. La clase A
+     no viene como columna en HubSpot — es la resta del universo menos AA,
+     AAA y las que no tienen clasificación. */
+  /* Dos donas del MISMO mes que la tarjeta de arriba: las que entraron y,
+     al lado, las que trajo marketing. Puestas juntas y con las mismas
+     categorias, se lee de un golpe si marketing trae mejor o peor calidad
+     que el resto — que es la pregunta del frente. */
+  var COLCL = { 'AAA': 'var(--s3)', 'AA': 'var(--s2)', 'A': 'var(--s1)',
+                'Sin clasificar': 'var(--borde-fuerte)' };
+  function pintarTorta(id, datos, n, sub) {
+    pintar(id, function (el) {
+      chTorta(el, (datos || []).map(function (r) {
+        return { etiqueta: r.clase, y: r.n, color: COLCL[r.clase] || 'var(--s4)' };
+      }), { alto: 220, formato: fNum, centroSub: sub,
+        detalle: function (d) {
+          return [{ nombre: 'Sedes', valor: fNum(d.y) },
+                  { nombre: 'del total del mes', valor: fPct(n ? Math.round((d.y / n) * 1000) / 10 : 0) }];
+        } });
+    });
+  }
+  if (comp.todas) {
+    h += '<div class="grid2">' +
+      panel('Las ' + fNum(comp.todas.n) + ' que entraron en ' + esc(comp.mes),
+        'todos los orígenes, por clasificación de aliado', '', 'gF1Torta') +
+      // Sin el desglose por canal: el reparto por origen ya va completo en
+      // la tabla de la seccion 4, y repetirlo aca solo lo desactualiza.
+      panel('Las ' + fNum(comp.mkt.n) + ' que trajo marketing',
+        fPct(comp.mkt.pct) + ' del mes · por clasificación de aliado',
+        '', 'gF1TortaMkt') +
+      '</div>';
+    pintarTorta('gF1Torta', comp.todas.filas, comp.todas.n, 'sedes nuevas de ' + comp.mes);
+    pintarTorta('gF1TortaMkt', comp.mkt.filas, comp.mkt.n, 'de marketing');
+  }
+  // --- Cohortes de deals de HubSpot ---------------------------------
+    h += '<h2 class="sec">5 · ¿En qué termina la demanda que entró?</h2>' +
+      '<p class="sec-sub">' + (em.cohorte
+        ? 'doble corte: las ' + fNum(em.sedes) + ' sedes que entraron en el ' +
+          'período (' + esc(em.mes) + ') y los créditos que radicaron en el ' +
+          'período · ' + esc(em.universo || '')
+        : 'de los créditos radicados en el período · ' + esc(em.universo || '')) +
+      '</p>';
+    h += filaKPIs(em.kpis);
+
+    // Sin esta linea la seccion se lee como el total del mes. No lo es: es
+    // solo la cosecha nueva, y pesa ~1%. Decirlo aqui evita el malentendido
+    // y de paso es el mejor argumento para el frente 2.
+    if (em.contexto) {
+      h += '<div class="lectura">Es la cosecha nueva, no el mes completo: ' +
+        'estas ' + fNum(em.sedes) + ' sedes pusieron ' + fPct(em.contexto.pctMonto) +
+        ' de la plata del período (' + fCopC(em.contexto.monto) + ' en total, ' +
+        fNum(em.contexto.sol) + ' solicitudes). Los otros ' +
+        fCopC(em.contexto.montoResto) + ' los pusieron sedes que entraron en meses ' +
+        'anteriores — por eso el negocio se sostiene en el stock, no en la ' +
+        'adquisición del mes.</div>';
+    }
+
+    if (em.hay) {
+      // El embudo y el monto diario no aportaban: el embudo repetia los tres
+      // numeros que ya estan en las tarjetas, y el monto diario de una
+      // cosecha nueva son 13 barras dispersas sobre 31 dias.
+      // Share de la plata por origen. Los origenes van aunque pongan cero: un
+      // origen que trajo sedes y no puso plata es informacion.
+      if ((em.canales || []).length) {
+        h += '<div style="margin-top:14px">' +
+          panel('¿De qué origen salió esa plata?',
+            fCopC(em.montoCanales) + ' de la cosecha del período, repartidos por ' +
+            'el origen de la sede · sede lograda = sede que firmó al menos un ' +
+            'crédito' + (em.mesPrev ? ' · delta vs cosecha de ' + esc(em.mesPrev) : ''),
+            tabla([
+              { t: 'Origen', k: 'canal', f: 'txt', txt: true },
+              { t: 'Solicitudes', k: 'sol' },
+              { t: 'Aprobados', k: 'apr' },
+              { t: 'Desembolsos', k: 'des' },
+              { t: 'Conv', k: 'conv', f: 'pct' },
+              { t: 'Sedes logradas', k: 'sedes' },
+              { t: 'Plata', k: 'monto', f: 'cop' },
+              { t: 'Plata/sede', k: 'porSede', f: 'cop' },
+              { t: 'Ticket', k: 'ticket', f: 'cop' },
+              { t: '% de la plata', k: 'pct', f: 'pct' },
+              { t: 'vs período anterior', k: 'deltaMonto', f: 'delta' }
+            ], em.canales)) +
+          '</div>';
+      }
+    }
+  }
+
+  // --- 2. La pauta ---------------------------------------------------
+  h += '<h2 class="sec">6 · La pauta: ¿cuánto nos cuesta un lead?</h2>' +
+    '<p class="sec-sub">Meta Ads · no depende del origen de la sede</p>';
+  h += filaKPIs((f.kpis || []).slice(0, 3));
+
+  h += '<div class="grid2" style="margin-top:14px">' +
+    panelGran('Leads', 'formularios de pauta', 'leads', 'gF1Leads') +
+    panelGran('Costo por lead', 'COP — menos es mejor', 'cpl', 'gF1Cpl') +
+    '</div>';
+  pintar('gF1Leads', function (el) {
+    chBarras(el, serieSegunGran(f.serie, 'leads'),
+      { color: 'var(--s2)', nombre: 'Leads', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fNum,
+        vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  pintar('gF1Cpl', function (el) {
+    chLinea(el, serieSegunGran(f.serie, 'cpl'),
+      { color: 'var(--s1)', nombre: 'CPL', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fCop,
+        formatoEje: fCopC, vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  var kImp = (f.kpis || [])[3], kCtr = (f.kpis || [])[4];
+  if (kImp && kCtr && kImp.valor !== null) {
+    h += '<p class="sec-sub" style="margin-top:8px">Alcance de la pauta en el período: ' +
+      esc(fNum(kImp.valor)) + ' impresiones, CTR ' + esc(fPct(kCtr.valor)) + '.</p>';
+  }
+
+  // El CPL no dice si la pauta sirvio: dice que cuesta un formulario. Esto
+  // cierra el ciclo hasta la plata que pusieron las sedes que ese gasto trajo.
+  var rt = f.retorno;
+  if (rt) {
+    h += '<h3 class="sub-sec" style="margin-top:20px">¿Y qué devolvió esa pauta?</h3>' +
+      '<p class="sec-sub">la campaña es a médicos, así que las sedes de origen ' +
+      'social media son el resultado de ese gasto · cosecha de ' + esc(rt.mes) + '</p>';
+    h += filaKPIs(rt.kpis);
+  }
+
+  var sinF = (f.canalesSinFuente || []).filter(function (c) {
+    return c.detalle !== 'conectada' && c.canal.indexOf('Pauta') !== 0;
+  });
+  if (sinF.length) {
+  }
+
+  var ac = f.activacion;
+  if (ac) {
+    // GLOBAL, no el subconjunto de marketing: la pregunta es si las sedes
+    // que entraron arrancan, sin importar quien las trajo.
+    h += '<h2 class="sec">7 · De las sedes que entraron, ¿cuántas arrancaron?</h2>' +
+      '<p class="sec-sub">cosecha de ' + esc(ac.mes) + ' · todos los orígenes · ' +
+      'activa = radicó al menos una solicitud en el mes · exitosa = 3 o más ' +
+      'solicitudes, o ya con desembolso</p>';
+    h += filaKPIs(ac.kpisTodas || ac.kpis);
+    h += '<div class="grid2" style="margin-top:14px">' +
+      panel('De nuevas a exitosas',
+        'las ' + fNum(ac.todas.total) + ' sedes que entraron en ' + esc(ac.mes) +
+        (ac.todas.sinId
+          ? ' · ' + fNum(ac.todas.sinId) + ' sin id_internal, no verificables'
+          : ''),
+        '', 'gF1Act') +
+      '</div>';
+    pintar('gF1Act', function (el) {
+      chBarrasH(el, (ac.pasosTodas || ac.pasos || []).map(function (p) {
+        return { etiqueta: p.etapa, y: p.valor, d: p };
+      }), { color: 'var(--s1)', formato: fNum, anchoEtiqueta: 110,
+        detalle: function (d) {
+          return [{ nombre: 'Sedes', valor: fNum(d.d.valor) },
+                  { nombre: '% de las nuevas del mes', valor: fPct(d.d.pct) }];
+        } });
+    });
+  }
+
+  h += cuali(f.textos);
+  return h;
+}
+
+/* Un mapa de cohorte de profundizacion. Recibe la especificacion que armo
+   el motor (D.f2.mapas[n]) para no acabar con una firma de diez argumentos
+   posicionales.
+
+/* Grupo con el que se comparan los mapas de profundizacion. Vive aparte de
+   los filtros globales a proposito: no cambia el universo del tablero, solo
+   agrega un segundo grupo a estas seis tablas. Meterlo arriba con los otros
+   haria pensar que filtra todo. */
+var CMP_F2 = '';
+
+function setComparar(v) {
+  CMP_F2 = v || '';
+  cargar();
+}
+
+/* Filtro LOCAL de F7 (long tail): que cluster/audiencia mirar. Igual que
+   CMP_F2, vive fuera de D y dispara una recarga completa — el motor
+   recalcula el frente entero (poblacion, serie, impactos, workflows) ya
+   acotado a ese cluster, en vez de filtrar en el navegador. */
+var F7_FILTRO_AUD = '';
+
+function f7SetFiltro(v) {
+  F7_FILTRO_AUD = v || '';
+  cargar();
+}
+
+/* Un mapa de cohorte. Si hay comparacion, cada cosecha trae dos filas — el
+   grupo A y el grupo B — para poder leer la misma columna M hacia abajo. Al
+   final va el promedio de cada grupo.
+
+   Cada celda lleva el numero Y su porcentaje sobre la cosecha, porque el
+   porcentaje es EXACTAMENTE lo que define la intensidad del color. En el mapa
+   de plata el segundo dato es el monto, que es la unidad que importa ahi. */
+function mapaCohorte(m) {
+  var filas = m.filas || [];
+  if (!filas.length) {
+    return '<div class="panel"><h3>' + esc(m.orden + ' · ' + m.titulo) + '</h3>' +
+      '<div class="vacio-graf">Sin cosechas en este universo</div></div>';
+  }
+  var cmp = (D.f2 && D.f2.comparar) || {};
+  var hayB = !!(cmp.activo && (m.filasB || []).length);
+  var offs = (m.offsets === undefined ? 7 : m.offsets);
+
+  // La escala de color se calcula sobre los DOS grupos: con una escala por
+  // grupo, un 40% de marketing y un 40% de comercial saldrian de distinto
+  // tono y la comparacion visual mentiria.
+  var tope = topePorSede(hayB ? filas.concat(m.filasB) : filas);
+
+  var h = '<div class="panel"><h3>' + esc(m.orden + ' · ' + m.titulo) + '</h3>' +
+    '<p class="sub"><b>' + esc(m.pregunta) + '</b> ' + esc(m.def) + '. ' +
+    esc(m.sub) + '</p><div class="tabla-wrap">' +
+    '<table class="t"><thead><tr><th>Cosecha</th>' +
+    (hayB ? '<th>Grupo</th>' : '') +
+    '<th>' + esc(m.colN || 'Sedes') + '</th>';
+  for (var k = 0; k <= offs; k++) h += '<th>M' + k + '</th>';
+  h += '</tr></thead><tbody>';
+
+  var hayBajas = false;
+
+  /** Una fila de la tabla. base = sedes contra las que se saca el %. */
+  function fila(f, etiqueta, clase, esProm) {
+    var baja = !esProm && (!f.n || f.n < MIN_COSECHA);
+    if (baja) hayBajas = true;
+    var h2 = '<tr' + (clase ? ' class="' + clase + '"' : '') + '>';
+    h2 += '<td>' + esc(esProm ? 'Promedio' : f.cosecha) +
+      (baja ? ' <span class="cel-vacia" style="font-size:10px">muestra baja</span>' : '') +
+      '</td>';
+    if (hayB) h2 += '<td class="txt cel-grupo">' + esc(etiqueta || '') + '</td>';
+    h2 += '<td>' + fNum(f.n) +
+      (f.nBase !== undefined && f.nBase !== f.n
+        ? '<span class="cel-vacia" style="display:block;font-size:10px">' +
+          fNum(f.nBase) + ' ' + esc(m.nBaseEtq || 'en CS') + '</span>'
+        : '') + '</td>';
+    (f.celdas || []).forEach(function (c, i) {
+      if (c === null || c === undefined) { h2 += '<td class="cel-vacia">·</td>'; return; }
+      // En el promedio el % sale de la base agrupada, no del n de una cosecha.
+      // nBase: algunos mapas tienen un denominador propio. El de salida de
+      // CS divide por las sedes que ENTRARON a CS, no por la cosecha
+      // completa: una sede que nunca entro no puede salir.
+      var den = esProm && f.base ? f.base[i]
+        : (f.nBase === undefined ? f.n : f.nBase);
+      var pc = den ? Math.round((c / den) * 1000) / 10 : 0;
+      // Un mapa puede traer % Y plata a la vez (desembolsos/desembolsos_mes,
+      // 24-sep-2026) -- antes esto era o lo uno o lo otro y la plata le
+      // ganaba al %, asi que un mapa con las dos cosas nunca mostraba el %.
+      var partes = [];
+      if (m.conMonto) {
+        var mo = (f.extras || [])[i];
+        partes.push(esc(mo ? fCopC(mo) : '$0'));
+      }
+      if (m.pctCelda) partes.push(esc(fPct(pc)));
+      var segundo = partes.length ? '<span class="cel-pct">' + partes.join(' · ') + '</span>' : '';
+      if (baja) {
+        h2 += '<td class="cel-vacia">' + esc(fNum(c)) + segundo + '</td>';
+        return;
+      }
+      var paso = pasoCalor(c, den, tope);
+      var tt = (esProm ? 'Promedio' : f.cosecha) +
+        (etiqueta ? ' · ' + etiqueta : '') + ' · M' + i + ' · ' +
+        fNum(c) + ' de ' + fNum(den) + ' (' + fPct(pc) + ')' +
+        (esProm && f.cuantas ? ' · ' + fNum(f.cuantas[i]) + ' cosechas' : '') +
+        (m.conMonto && (f.extras || [])[i] ? ' · ' + fCop(f.extras[i]) : '');
+      h2 += '<td class="hm hm-' + m.clase + '-' + paso + '" title="' + esc(tt) + '">' +
+        esc(fNum(c)) + segundo + '</td>';
+    });
+    return h2 + '</tr>';
+  }
+
+  if (hayB) {
+    // Intercaladas por cosecha: es la unica disposicion en la que se compara
+    // sin mover los ojos por la pantalla.
+    var porCos = {};
+    filas.forEach(function (f) { (porCos[f.cosecha] = porCos[f.cosecha] || {}).a = f; });
+    (m.filasB || []).forEach(function (f) {
+      (porCos[f.cosecha] = porCos[f.cosecha] || {}).b = f;
+    });
+    Object.keys(porCos).sort().forEach(function (c) {
+      var par = porCos[c];
+      if (par.a) h += fila(par.a, cmp.etiquetaA, 'cmp-a');
+      if (par.b) h += fila(par.b, cmp.etiquetaB, 'cmp-b');
+    });
+    if (m.promedio) h += fila(m.promedio, cmp.etiquetaA, 'fila-prom cmp-a', true);
+    if (m.promedioB) h += fila(m.promedioB, cmp.etiquetaB, 'fila-prom cmp-b', true);
+  } else {
+    filas.forEach(function (f) { h += fila(f, '', ''); });
+    if (m.promedio) h += fila(m.promedio, '', 'fila-prom', true);
+  }
+
+  h += '</tbody></table></div>' +
+    leyendaCalor(m.clase, m.escala || 'intensidad por sede de la cosecha') +
+    '<p class="sub" style="margin:6px 0 0">' +
+    (m.conMonto && m.pctCelda
+      ? 'El % del promedio es la tasa agrupada (sedes ÷ sedes de las cosechas que ' +
+        'llegaron a ese mes); la plata del promedio es la suma dividida por cuántas ' +
+        'cosechas llegaron a ese mes.'
+      : m.conMonto
+        ? 'El promedio es por cosecha: la suma dividida por cuántas llegaron a ese mes.'
+        : 'El promedio es la tasa agrupada — el total sobre el total de sedes de las ' +
+          'cosechas que llegaron a ese mes, no el promedio de los porcentajes.') +
+    (hayBajas
+      ? ' Las cosechas con menos de ' + MIN_COSECHA + ' sedes van en gris y no ' +
+        'entran en la escala: con esa muestra, una sola sede mueve el porcentaje ' +
+        'demasiado.'
+      : '') +
+    '</p>' +
+    // Los avisos propios del mapa van DENTRO de su panel y no en un pie
+    // comun: cada uno cambia como se lee ese mapa y solo ese. El primero va
+    // en amarillo porque limita la lectura de las celdas; el segundo es
+    // contexto del dato.
+    (m.nota ? '<div class="aviso-foto">' + esc(m.nota) + '</div>' : '') +
+    (m.nota2 ? '<p class="sub" style="margin:8px 0 0">' + esc(m.nota2) +
+      '</p>' : '') +
+    (m.nota3 ? '<p class="sub" style="margin:8px 0 0">' + esc(m.nota3) +
+      '</p>' : '') +
+    '</div>';
+  return h;
+}
+
+/* Frente 2 reducido a lo que pregunta de verdad: la vida de una cosecha,
+   contada en cinco mapas y en orden. Arrancan -> arrancan de verdad -> se
+   enfrian -> cuanta plata dejan -> se pierden.
+
+   Todo el frente responde al filtro global de origen: es de TODAS las
+   sedes, y marketing es un filtro mas. */
+function vistaF2() {
+  var f = D.f2;
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 2 · profundización</div>' +
+    '<h1>¿Qué le pasa a una cosecha después de entrar?</h1>' +
+    '<p class="lead">Traer una sede no es el resultado. El resultado es que siga ' +
+    'radicando seis meses después — y saber en qué mes se cae.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  if (!f.hay) {
+    h += '<div class="vacio-graf">No hay cosechas en este universo. ' +
+      'Prueba con otro origen.</div>';
+    return h;
+  }
+
+  // El bloque de "por qué mi conteo de sedes no es igual al de BI" (escalera
+  // + acuerdo de fecha) se quitó de pantalla a pedido de Emmanuel el
+  // 9-sep-2026: generaba más confusión que claridad de cara al negocio. El
+  // motor sigue calculando f.escalera y f.fechaCosecha por si hace falta
+  // retomar la conversación con BI — solo se dejó de renderizar.
+
+  // El comparador va ACA, dentro del frente, y no en la barra de filtros: no
+  // cambia el universo del tablero, solo agrega un segundo grupo a estas seis
+  // tablas. Arriba se leeria como un filtro global mas.
+  var cmp = f.comparar || {};
+  if ((cmp.opciones || []).length) {
+    h += '<div class="cmp-barra">' +
+      '<span class="cmp-tit">Comparar contra</span>' +
+      '<button class="cmp-chip' + (!cmp.activo ? ' on' : '') +
+      '" onclick="setComparar(\'\')">sin comparar</button>' +
+      cmp.opciones.map(function (o) {
+        return '<button class="cmp-chip' + (cmp.clave === o.clave ? ' on' : '') +
+          '" onclick="setComparar(\'' + esc(o.clave) + '\')">' +
+          esc(o.nombre) + ' <small>' + fNum(o.sedes) + '</small></button>';
+      }).join('') +
+      (cmp.activo
+        ? '<span class="cmp-leyenda"><i class="a"></i>' + esc(cmp.etiquetaA) +
+          '<i class="b"></i>' + esc(cmp.etiquetaB) + '</span>'
+        : '') +
+      '</div>';
+  }
+
+  h += '<p class="sec-sub">M0 es el mes de la cosecha según la fecha ' +
+    'unificada, M1 el siguiente. ' +
+    'Un punto quiere decir que ese mes todavía no ha ocurrido. Universo: ' +
+    esc(f.universo || '') + ' · ' + fNum(f.cosechas) + ' cosechas' +
+    (f.sinId ? ' · ' + fNum(f.sinId) + ' sedes sin id_internal quedan fuera de los ' +
+      'mapas porque no hay llave para cruzarlas contra la plataforma' : '') +
+    '. ' + esc(f.notaCarga || '') + '</p>';
+
+  (f.mapas || []).forEach(function (m) {
+    m.offsets = f.offsets;
+    h += '<div style="margin-top:14px">' + mapaCohorte(m) + '</div>';
+  });
+
+  h += cuali(f.textos);
+  return h;
+}
+
+/* Frente 4 · Rescate. Dos preguntas y nada mas:
+     1. de lo que el motor aprobo, cuanto cerramos — por ventana
+     2. que hicimos y que logramos, contra el periodo anterior
+
+   Se quito la seccion de "plata sobre la mesa": era un STOCK historico de
+   15.845 aprobados sin firmar. No es meta de nadie, no se mueve con nada que
+   se haga este mes, y su tamano ($190 mil M) hacia ver irrelevante a todo lo
+   demas. */
+/* ------------------------------------------------------------------ F4
+   El frente se lee de lo macro a lo micro, y cada cifra aparece UNA vez:
+
+     1. la oportunidad   las tres ventanas y la bolsa de plata sin firmar,
+                         partida en lo que todavia se puede rescatar
+     2. la cobertura     de esa bolsa, cuanto alcanzamos a tocar y que paso
+                         cuando llamamos
+     3. lo recuperado    firmas, plata y en que quedaron los casos
+     4. por que no       las razones de quien SI hablo con el equipo
+     5. el tiempo        cosechas de gestion, semana a semana y los 23 meses
+
+   Lo que se saco y por que:
+     · la tabla "cada ventana cierra distinto" repetia las tarjetas de
+       ventana que iban justo debajo
+     · las filas "Sede fuera de HubSpot" y "Especialidad sin ventana" no son
+       ventanas: son huecos de datos, y ahora se declaran como tal
+     · "Accion y recuperacion, lado a lado" repetia el embudo paso por paso
+     · el bloque "Lo que logramos" repetia los cuatro KPIs de la seccion 1
+     · los dos paneles del canal automatico median impactos a SEDES y este
+       frente mide la oportunidad sobre PACIENTES: no se sumaban con nada de
+       al lado. Los workflows long tail se leen en F7, que es su frente
+     · las causales "No contesta" y "Cuelga" repetian dos pasos del embudo
+     · la tabla "Mes a mes, las dos operaciones" repetia la grafica de 23
+       meses que iba encima
+
+   Encima de todo eso va lo que Kevin revisa cada semana: sus metas (una
+   por semana, calculada sobre su propia bolsa y sus propios dias
+   trabajados) y la linea de tiempo completa de la gestion, que no se corta
+   con el filtro de fecha del tablero porque es la historia contra la que
+   se lee el resto del frente.
+*/
+/* La meta de la semana, calculada matematicamente y no puesta a dedo:
+   sale de cuanto Kevin YA desembolsa por cada dia que efectivamente
+   trabaja (la mediana de esa tasa entre las semanas con al menos 2 dias
+   de gestion), proyectada a los dias habiles reales de la semana y
+   aplicada sobre LA BOLSA de esa semana. Por eso ninguna semana pide lo
+   mismo: una semana con mas bolsa o mas dias habiles pide mas. */
+function claseCumplimiento_(c) {
+  if (c === null || c === undefined) return '';
+  if (c >= 100) return 'ok';
+  if (c >= 60) return 'media';
+  return 'mal';
+}
+
+/* Dos metas, la semana en curso, nada mas: cuanto debia desembolsar y
+   cuanto lleva, cuanto debia contactar y cuanto lleva. Una barra grande por
+   meta, no una fila por semana — eso ya vive en la grafica de la seccion 2. */
+function filaMetaGrande_(etq, sub, actualTxt, metaTxt, pct) {
+  var cls = claseCumplimiento_(pct);
+  var w = pct === null ? 0 : Math.min(100, pct);
+  return '<div class="meta-grande">' +
+    '<div class="meta-grande-cab"><b>' + esc(etq) + '</b><span>' + esc(sub) + '</span></div>' +
+    '<div class="meta-grande-cifra">' + actualTxt +
+    '<span> de meta ' + metaTxt + '</span></div>' +
+    '<div class="meta-grande-pista"><div class="meta-grande-fill ' + cls +
+    '" style="width:' + w + '%"></div></div>' +
+    '<div class="meta-grande-pct ' + cls + '">' +
+    (pct === null ? '--' : fPct(pct)) + ' cumplido' +
+    (pct !== null && pct > 100 ? ' <span class="metas-supero">▲ la superó</span>' : '') +
+    '</div></div>';
+}
+
+// Estado del selector semana/mes de las metas: vive fuera de D porque es
+// una preferencia de vista, no un dato del servidor.
+// poblacion: 'kevin' = solo lo que estuvo en la lista de rescate (la meta
+// original, UNA palanca del frente). 'rescateTotal' = todo credito que
+// tardo mas de 2 dias en firmar, la haya trabajado Kevin, otra palanca
+// futura, o nadie — corregido el 9-sep-2026 (la primera version, llamada
+// 'general', media TODA la empresa sin ese filtro y no tenia que ver con
+// este frente). Son dos poblaciones distintas a proposito: Rescate total
+// siempre es >= Kevin, nunca al reves.
+var F4_META = { gran: 'semana', poblacion: 'kevin' };
+
+function f4MetaSetGran(g) {
+  F4_META.gran = g;
+  document.querySelectorAll('#metaGran .tl-btn').forEach(function (b) {
+    b.classList.toggle('activo', b.getAttribute('data-g') === g);
+  });
+  f4MetaRender();
+  // La grafica de abajo ("por que la meta es esa") tiene que responder al
+  // MISMO toggle: pedido explicito, 9-sep-2026 — antes se quedaba fija en
+  // Kevin sin importar que meta se estuviera mirando arriba.
+  f4HistoriaRender();
+}
+
+function f4MetaSetPoblacion(p) {
+  F4_META.poblacion = p;
+  document.querySelectorAll('#metaPoblacion .tl-btn').forEach(function (b) {
+    b.classList.toggle('activo', b.getAttribute('data-p') === p);
+  });
+  f4MetaRender();
+  f4HistoriaRender();
+}
+
+/* Historia de dos bugs en este mismo punto, ya superados los dos:
+   1. Antes mostraba SIEMPRE la ultima fila (hoy), sin importar el rango
+      elegido — poner "agosto" no cambiaba nada.
+   2. Despues caia "a la mas cercana" cuando el rango no tenia fila propia,
+      pero sin piso: al pedir julio-2026 (anterior al arranque del software)
+      se caia a la ULTIMA fila, que es septiembre — pedias julio y veias la
+      plata de septiembre. De ahi salia el "63 millones" que no cuadraba.
+   3. Corregido eso, seguia aproximando al MES CALENDARIO que tocara el fin
+      del rango en vez de usar el rango exacto (24-sep-2026: filtrando
+      24-ago a 24-sep, la tarjeta mostraba solo septiembre) — pedido
+      explicito de Emmanuel: "debería mostrarme TODO de ese período". Ya no
+      hay aproximacion: `metaRango`/`metaRangoSemanal` (y sus pares de
+      rescate total) se calculan en el servidor sobre R.inicio..R.fin
+      literal, y el toggle esta-semana/este-mes solo cambia la VARA de
+      comparacion (tasa calibrada semanal vs mensual), no que dias se ven. */
+
+function f4MetaRender() {
+  var ge = (D.f4 || {}).gestion || {};
+  var cont = document.getElementById('metaCuerpo');
+  if (!cont) return;
+  var esMes = F4_META.gran === 'mes';
+  var esGeneral = F4_META.poblacion === 'rescateTotal';
+
+  if (esGeneral) {
+    f4MetaRenderRescateTotal_(ge, cont, esMes);
+    return;
+  }
+
+  // El rango es SIEMPRE el filtro global exacto (R.inicio..R.fin) — el
+  // toggle esta-semana/este-mes solo decide con que tasa calibrada se
+  // compara (metaRango usa la mensual, metaRangoSemanal la semanal), no
+  // que dias se miran. Pedido explicito 24-sep-2026: filtrar 24-ago a
+  // 24-sep tiene que mostrar esos 32 dias completos, no solo septiembre.
+  var ult = esMes ? ge.metaRango : ge.metaRangoSemanal;
+  if (!ult || (!ult.dias && ult.meta === null)) {
+    cont.innerHTML = '<div class="vacio-graf">No hay meta para el rango ' +
+      'elegido. La gestión con software arrancó el <b>31 de julio de 2026</b>; ' +
+      'antes de esa fecha no hay historial con el que calibrar una meta. ' +
+      'Lo que pasó antes está en la gráfica de abajo.</div>';
+    return;
+  }
+  var fDesde = document.getElementById('fDesde').value;
+  var fHasta = document.getElementById('fHasta').value;
+  var etiqueta = 'del ' + etiquetaSemanaCorta(fDesde) + ' al ' + etiquetaSemanaCorta(fHasta) +
+    ' · vara ' + (esMes ? 'mensual' : 'semanal');
+  // diasHabiles = TRANSCURRIDOS, diasHabilesTotal = el periodo completo. La
+  // meta se calibra aparte (tasaObjetivoMes/Semana, el mejor periodo YA
+  // CERRADO) y se aplica sobre bolsaProyectada, que solo proyecta cuando el
+  // periodo todavia esta en curso.
+  var h = '<p class="sub" style="margin:0 0 10px">' + esc(etiqueta) + ' · ' +
+    fNum(ult.dias) + ' de ' + fNum(ult.diasHabiles) + ' días hábiles ' +
+    'trabajados (el rango completo tiene ' + fNum(ult.diasHabilesTotal) + ')</p>';
+  var bolsaMeta = ult.bolsaProyectada || ult.bolsa;
+  h += '<div class="metas-actual">' +
+    filaMetaGrande_('Meta de cobertura', 'share de la bolsa que el equipo ' +
+      'alcanzó a trabajar', fPct(ult.cobertura),
+      fPct(ge.tasaObjetivoCobertura), ult.cumplimientoCobertura) +
+    filaMetaGrande_('Meta de contactados', 'de lo trabajado, share que ' +
+      'contesta la llamada', fPct(ult.contacto),
+      fPct(ge.tasaObjetivoContacto), ult.cumplimientoContacto) +
+    filaMetaGrande_('Meta de desembolso', 'sobre la bolsa ' +
+      (ult.proyectado ? 'proyectada de todo el rango' : 'de este rango') +
+      ' (' + fCopC(bolsaMeta) + ')',
+      fCopC(ult.desembolsado), fCopC(ult.meta), ult.cumplimiento) +
+    '</div>';
+  // La cobertura puede pasar el 100% de verdad: el equipo tambien ataca
+  // casos que quedaron sin trabajar de dias anteriores, asi que "trabajado"
+  // puede ser mayor que "lo que entro" en ese mismo periodo. Sin esta linea
+  // se lee como un error de cuentas.
+  if (ult.cumplimientoCobertura !== null && ult.cumplimientoCobertura > 100) {
+    h += '<p class="sub" style="margin:8px 0 0">La cobertura superó la ' +
+      'meta porque el equipo también trabaja casos que quedaron sin tocar ' +
+      'de días anteriores, no solo lo que entró en este período.</p>';
+  }
+  cont.innerHTML = h;
+}
+
+/* "Rescate total" (todas las palancas, no solo Kevin) es mas simple que la
+   meta de Kevin: no tiene bolsa ni cobertura/contacto (se mide contra su
+   propio historico, no contra una bolsa del dia), asi que es solo UNA
+   tarjeta — desembolsado contra una meta fija en pesos (el mejor periodo
+   YA CERRADO x 1.4 de estiron, sin proyeccion). Se separa de f4MetaRender
+   para no forzar las dos poblaciones dentro de la misma forma de tarjeta.
+
+   La poblacion es "creditos que tardaron MAS de 2 dias en firmar" — la
+   definicion de "necesito que alguien lo empuje", venga esa ayuda de
+   Kevin, de otra palanca futura, o de nadie (y aun asi tardo). Por eso
+   Rescate total >= Kevin siempre: incluye lo que Kevin no alcanzo a
+   tocar. Corregido el 9-sep-2026: la primera version media TODA la
+   empresa, sin filtrar por esos 2 dias — eso mezclaba conversion organica
+   con rescate y disparaba el numero a una escala que no tenia que ver con
+   este frente (~42x Kevin, contra las ~3x que da bien definido). */
+function f4MetaRenderRescateTotal_(ge, cont, esMes) {
+  // Mismo cambio 24-sep-2026 que f4MetaRender: el rango es el filtro
+  // global exacto, no el mes/semana calendario mas cercano. La meta sigue
+  // siendo en PESOS fijos (el mejor periodo ya cerrado x 1.4), prorrateada
+  // por los dias habiles reales del rango elegido — el toggle esta-semana/
+  // este-mes decide si se prorratea desde la meta semanal o la mensual.
+  var ult = esMes ? ge.metaRangoRescateTotalMensual : ge.metaRangoRescateTotalSemanal;
+  if (!ult || ult.meta === null) {
+    cont.innerHTML = '<div class="vacio-graf">No hay meta de rescate total ' +
+      'para el rango elegido — todavía no hay ' + (esMes ? 'un mes' : 'una semana') +
+      ' ya cerrada con la que calibrar.</div>';
+    return;
+  }
+  var fDesde = document.getElementById('fDesde').value;
+  var fHasta = document.getElementById('fHasta').value;
+  var etiqueta = 'del ' + etiquetaSemanaCorta(fDesde) + ' al ' + etiquetaSemanaCorta(fHasta) +
+    ' · vara ' + (esMes ? 'mensual' : 'semanal');
+  var h = '<p class="sub" style="margin:0 0 10px">' + esc(etiqueta) + ' · ' +
+    fNum(ult.casos) + ' créditos que tardaron más de 2 días en firmar</p>';
+  h += '<div class="metas-actual">' +
+    filaMetaGrande_('Meta de desembolso · rescate total (todas las palancas)',
+      (esMes ? 'el mejor mes ya cerrado' : 'la mejor semana ya cerrada') + ', con 40% de ' +
+      'estirón, prorrateada a los días hábiles de este rango · créditos ' +
+      'aprobados que tardaron más de 2 días en firmar, los haya trabajado ' +
+      'Kevin o no',
+      fCopC(ult.desembolsado), fCopC(ult.meta), ult.cumplimiento) +
+    '</div>';
+  cont.innerHTML = h;
+}
+
+function panelMetasF4(ge) {
+  var metas = ge.metas || [];
+  if (!metas.length) {
+    return '<div class="vacio-graf">Todavía no hay suficiente historial ' +
+      'para calcular una meta semanal.</div>';
+  }
+  // 24-sep-2026: este toggle YA NO cambia que dias se ven (eso lo decide
+  // el filtro global de fecha, siempre) -- solo cambia contra que meta
+  // fija se compara el desembolso (la mejor semana o el mejor mes ya
+  // cerrado, x 1.4). Se renombro de "esta semana"/"este mes" a "vs.
+  // semana"/"vs. mes" para que no parezca que angosta el rango -- con el
+  // nombre viejo, Cobertura y Contactados (que usan UN solo benchmark,
+  // no dos) se veian "trabados" al cambiar de pestana, y parecia un bug.
+  var h = '<div class="tl-cab" style="margin-bottom:6px">' +
+    '<div class="tl-grupo" id="metaGran">' +
+    ['semana', 'mes'].map(function (g) {
+      return '<button class="tl-btn' + (g === F4_META.gran ? ' activo' : '') +
+        '" data-g="' + g + '" onclick="f4MetaSetGran(\'' + g + '\')">' +
+        (g === 'semana' ? 'vs. mejor semana' : 'vs. mejor mes') + '</button>';
+    }).join('') + '</div>' +
+    '<div class="tl-grupo" id="metaPoblacion">' +
+    [['kevin', 'gestión de Kevin'], ['rescateTotal', 'rescate total']].map(function (p) {
+      return '<button class="tl-btn' + (p[0] === F4_META.poblacion ? ' activo' : '') +
+        '" data-p="' + p[0] + '" onclick="f4MetaSetPoblacion(\'' + p[0] + '\')">' +
+        esc(p[1]) + '</button>';
+    }).join('') + '</div>' +
+    '</div>' +
+    '<p class="sub" style="margin:2px 0 8px">Este selector solo cambia la meta ' +
+    'de <b>desembolso</b> (contra la mejor semana o el mejor mes ya cerrado). ' +
+    'Cobertura y Contactados usan un único objetivo, así que no cambian entre ' +
+    'las dos vistas — el rango de días es siempre el del filtro de fecha de ' +
+    'arriba, en las dos.</p>';
+  h += '<div id="metaCuerpo"></div>';
+  pintar('metaCuerpo', function () { f4MetaRender(); });
+  return h;
+}
+
+// Estado del selector local de la linea de tiempo: vive fuera de D porque
+// no es un dato del servidor, es una preferencia de vista que no debe
+// disparar una recarga del tablero.
+/* UN SOLO GRAFICO EJECUTIVO (pedido explicito, 8-sep-2026): antes eran
+   cinco graficas y ninguna alcanzaba a contar la historia completa — la de
+   hoy solo tenia 22 dias (el software arranco 31-jul-2026) y la vieja no
+   se unia a la de hoy.
+
+   Responde al MISMO toggle que la tarjeta de metas de arriba (Kevin /
+   General, pedido explicito 9-sep-2026): si la meta que se esta mirando
+   es la de Kevin, esta grafica es "por que esa meta" para Kevin; si es la
+   general, tiene que ser el historico de la meta general — mostrar
+   siempre el mismo grafico de Kevin sin importar que meta se eligiera
+   arriba dejaba la pregunta "por que la meta es esa" sin responder para
+   la mitad de las vistas. */
+function panelHistoriaFirmaF4(ge) {
+  var hayKevin = (ge.historiaUnida || []).length > 0;
+  var hayRescateTotal = (ge.metasMesRescateTotal || []).length > 0;
+  if (!hayKevin && !hayRescateTotal) return '';
+  var h = '<div class="panel">' +
+    '<div class="leyenda" id="gF4HistoriaLeyenda" style="margin-bottom:4px"></div>' +
+    '<div class="grafica" id="gF4Historia"></div>' +
+    '<div class="lectura" id="tlNarrativa" style="margin-top:10px"></div>' +
+    '</div>';
+  pintar('gF4Historia', function () { f4HistoriaRender(); });
+  return h;
+}
+
+function f4HistoriaRender() {
+  var ge = (D.f4 || {}).gestion || {};
+  var cont = document.getElementById('gF4Historia');
+  var ley = document.getElementById('gF4HistoriaLeyenda');
+  var nar = document.getElementById('tlNarrativa');
+  if (!cont) return;
+  if (F4_META.poblacion === 'rescateTotal') {
+    f4HistoriaRenderRescateTotal_(ge, cont, ley, nar);
+  } else {
+    f4HistoriaRenderKevin_(ge, cont, ley, nar);
+  }
+}
+
+/* Una sola pieza, barras + linea, MISMO eje X (los mismos meses, oct-2024
+   a hoy): las barras son la plata desembolsada (reconstruida para
+   'antes' cruzando gestion_historica.documento contra t_sol_v2, ver
+   pull_hist_plata.py) y la linea es la tasa de firma — la unica metrica
+   que existe igual en las dos operaciones. Plata y % no comparten
+   escala, asi que cada una tiene SU eje, rotulado en el color de su
+   serie. Con la meta (mejor mes ya cerrado x 1.4) y el quiebre de
+   operacion marcados encima. */
+function f4HistoriaRenderKevin_(ge, cont, ley, nar) {
+  var serie = ge.historiaUnida || [];
+  if (!serie.length) {
+    cont.innerHTML = '<div class="vacio-graf">Todavía no hay historial ' +
+      'de Kevin para graficar.</div>';
+    if (ley) ley.innerHTML = ''; if (nar) nar.innerHTML = '';
+    return;
+  }
+  if (ley) {
+    ley.innerHTML = '<span class="leyenda-item"><i style="background:var(--s2)"></i>' +
+      'Desembolsado</span><span class="leyenda-item"><i style="background:var(--s1)"></i>' +
+      '% que firmó</span>';
+  }
+  var corte = serie.filter(function (m) { return m.ahora; })[0];
+  var ultimo = serie[serie.length - 1];
+  chBarrasLinea2Ejes(cont, serie.map(function (m) {
+    return { x: m.mes, barra: m.desembolsado, linea: m.tasaFirma };
+  }), {
+    colorBarra: 'var(--s2)', colorLinea: 'var(--s1)',
+    nombreBarra: 'Desembolsado', nombreLinea: '% que firmó',
+    formatoEjeBarra: fCompacto, formatoEjeLinea: fPct,
+    formatoBarra: fCopC, alto: 260, gran: 'mes',
+    // SIN metaLinea a propósito (quitada 9-sep-2026): es un valor de %
+    // (tasaObjetivoFirma) dibujado con la escala del eje derecho, pero al
+    // ser una línea horizontal se lee visualmente contra las barras de
+    // plata del eje izquierdo — el clásico problema de un gráfico de dos
+    // ejes. Se veía como si la meta fuera ~930M cuando el mejor mes de
+    // plata apenas llega a ~580M. La meta sigue explicada en texto en la
+    // narrativa de abajo, donde un número no se puede leer contra el eje
+    // equivocado.
+    corte: corte ? corte.mes : null,
+    corteEtq: 'arranca el software (31-jul-2026)'
+  });
+  if (nar) nar.innerHTML = narrativaHistoriaFirma_(serie, ge.tasaObjetivoFirma, ultimo);
+}
+
+/* Rescate total no tiene "% que firmó" (no se mide contra una lista de
+   trabajo, sino contra su propio historico de desembolsos), asi que es un
+   solo eje: barras de desembolso + la meta fija en pesos como linea
+   punteada — el mismo componente que ya usa el resto del tablero para
+   barras con meta, sin inventar uno nuevo. Sigue el toggle semana/mes de
+   la tarjeta de arriba, para que "por que esa meta" se responda con el
+   mismo grano que se esta mirando. */
+function f4HistoriaRenderRescateTotal_(ge, cont, ley, nar) {
+  var esMes = F4_META.gran === 'mes';
+  var serie = esMes ? (ge.metasMesRescateTotal || []) : (ge.metasRescateTotal || []);
+  if (!serie.length) {
+    cont.innerHTML = '<div class="vacio-graf">Todavía no hay historial ' +
+      'de rescate total para graficar.</div>';
+    if (ley) ley.innerHTML = ''; if (nar) nar.innerHTML = '';
+    return;
+  }
+  if (ley) {
+    ley.innerHTML = '<span class="leyenda-item"><i style="background:var(--s2)"></i>' +
+      'Desembolsado · rescate total (todas las palancas)</span>';
+  }
+  // SIN meta a propósito (quitada 9-sep-2026, a pedido de Emmanuel): la
+  // línea punteada de meta en la gráfica de Kevin confundió en una
+  // presentación (se leía contra la escala equivocada), y por consistencia
+  // se quitó también acá, aunque esta sí comparte una sola escala con las
+  // barras. La meta sigue explicada en texto en la narrativa de abajo.
+  chBarrasMeta(cont, serie.map(function (m) {
+    return { x: esMes ? m.mes : m.semana, y: m.desembolsado };
+  }), {
+    color: 'var(--s2)', formato: fCopC, nombre: 'Desembolsado',
+    gran: esMes ? 'mes' : undefined, alto: 260
+  });
+  var ultimo = serie[serie.length - 1];
+  if (nar) {
+    var etqUlt = esMes ? 'en ' + etiquetaX(ultimo.mes, 'mes')
+                       : 'en la semana del ' + etiquetaSemanaCorta(ultimo.semana);
+    nar.innerHTML = etqUlt.charAt(0).toUpperCase() + etqUlt.slice(1) +
+      ' se desembolsaron <b>' + fCopC(ultimo.desembolsado) + '</b> en créditos que ' +
+      'tardaron más de 2 días en firmar — la meta es <b>' + fCopC(ultimo.meta) +
+      '</b> (' + (esMes ? 'el mejor mes ya cerrado' : 'la mejor semana ya cerrada') +
+      ', con 40% de estirón), un <b>' + fPct(ultimo.cumplimiento) +
+      '</b> cumplido. Esta meta cuenta todas las palancas de rescate, no solo la ' +
+      'gestión de Kevin — por eso siempre es mayor o igual que su meta.';
+  }
+}
+
+/* La lectura se arma sola: compara el promedio de "antes" contra "ahora"
+   y dice donde esta parado el ultimo mes frente a la meta — para que la
+   grafica se pueda leer sin que nadie tenga que explicarla en la reunion. */
+function narrativaHistoriaFirma_(serie, meta, ultimo) {
+  var antes = serie.filter(function (m) { return !m.ahora && m.tasaFirma !== null; });
+  var ahora = serie.filter(function (m) { return m.ahora && m.tasaFirma !== null; });
+  function prom(arr) {
+    return arr.length ? arr.reduce(function (a, m) { return a + m.tasaFirma; }, 0) / arr.length : null;
+  }
+  var pAntes = prom(antes), pAhora = prom(ahora);
+  var txt = 'De los casos que se gestionan, <b>' + fPct(ultimo.tasaFirma || 0) +
+    '</b> firmó en ' + esc(etiquetaX(ultimo.mes, 'mes')) +
+    (ultimo.enCurso ? ' (mes en curso, todavía sin cerrar)' : '') + '.';
+  if (pAntes !== null && pAhora !== null) {
+    var dir = pAhora > pAntes * 1.05 ? 'mejor que'
+      : pAhora < pAntes * 0.95 ? 'por debajo de' : 'en línea con';
+    txt += ' El promedio desde que arrancó el software (' + fPct(Math.round(pAhora * 10) / 10) +
+      ') va <b>' + dir + '</b> el promedio de la operación anterior (' +
+      fPct(Math.round(pAntes * 10) / 10) + ').';
+  }
+  if (meta !== null && meta !== undefined) {
+    txt += ' La meta (' + fPct(meta) + ') es el <b>mejor mes que el rescate ya demostró, ' +
+      'con un 40% de estirón encima</b> — no un número puesto a dedo, y va a subir en ' +
+      'cuanto un mes nuevo supere al que hoy es el mejor.';
+  }
+  return txt;
+}
+
+function vistaF4() {
+  var f = D.f4;
+  var op = f.oportunidad || {};
+  var cb = f.cobertura || {};
+  var ge = f.gestion || {};
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 4 · rescate</div>' +
+    '<h1>De lo que el motor aprobó, ¿cuánto alcanzamos a rescatar?</h1>' +
+    '<p class="lead">El crédito aprobado vive 30 días. Rescatar es convencer al ' +
+    'paciente de firmar antes de que se le venza — y cada especialidad decide en ' +
+    'una ventana distinta.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  /* Disclaimer de pestaña (28-sep-2026, a pedido de Emmanuel). La pregunta
+     que lo motivó — "todo lo de esta pestaña son los que se pueden rescatar,
+     ¿no?" — tiene respuesta DISTINTA según la sección, y esa diferencia
+     nunca estuvo declarada:
+       · secciones 1, 2, 3, 5 y 6 miden la OPERACIÓN de rescate, y por
+         diseño incluyen a los que terminaron firmando (RESCATE_DESENLACE
+         los clasifica como "firmó" — es el resultado exitoso, la meta de
+         desembolso se calcula sobre ellos);
+       · la sección 4 (embudo de WhatsApp) mide solo a los RESCATABLES,
+         porque su pregunta es a quién le falta el aviso, y quien ya
+         desembolsó no lo necesita. */
+  h += '<div class="aviso"><span class="ico">⚠️</span><div>' +
+    '<b>Dos poblaciones distintas en esta pestaña.</b> Las secciones de metas, ' +
+    'cobertura, causales y oportunidad miden la <b>operación de rescate</b>: ' +
+    'incluyen a los pacientes que terminaron firmando, porque ese es ' +
+    'justamente el resultado que se persigue. El <b>embudo de WhatsApp ' +
+    '(sección 4)</b> es el único que se acota a los <b>rescatables</b> — los ' +
+    'que siguen aprobados esperando actuar — porque su pregunta es a quién le ' +
+    'faltó el aviso, y a quien ya desembolsó el sistema no se lo manda.' +
+    '</div></div>';
+
+  // El filtro que cambia el denominador de todo el frente va arriba, antes
+  // del primer numero: si aparece al final, el lector ya saco conclusiones
+  // sobre una bolsa que no sabia que estaba recortada.
+  var ex = f.excluido || {};
+
+  // =================================================================== 1
+  // Las metas y la historia de Kevin van PRIMERO: es lo que se revisa cada
+  // semana, y no dependen de si el período elegido tiene créditos aprobados
+  // — por eso van antes del corte "!op.hay".
+  if (ge.hay) {
+    h += '<h2 class="sec">1 · Metas, semana a semana</h2>' +
+      '<p class="sec-sub">cobertura, contactados y desembolso de la ' +
+      'gestión de Kevin — o, en el toggle de abajo, el desembolso de ' +
+      '<b>rescate total</b>: todas las palancas, no solo Kevin (créditos ' +
+      'que tardaron más de 2 días en firmar) · ninguna es un número fijo: ' +
+      'sale de la propia bolsa (o el propio histórico) y sus días ' +
+      'trabajados</p>';
+    h += panelMetasF4(ge);
+
+    // ================================================================= 2
+    h += '<h2 class="sec">2 · Cómo nos ha ido, y por qué la meta es esa</h2>' +
+      '<p class="sec-sub">un solo número que existe igual antes y después ' +
+      'del software (oct-2024 a hoy): de los casos que se gestionan, qué % ' +
+      'termina firmando · esta gráfica tiene su propio rango y no se corta ' +
+      'con el filtro de fecha del tablero</p>';
+    h += panelHistoriaFirmaF4(ge);
+  }
+
+  if (!op.hay) {
+    h += '<div class="vacio-graf">No hay créditos aprobados en este período y ' +
+      'universo.</div>';
+    return h;
+  }
+
+  // La oportunidad (tres ventanas) se movio al final de este frente
+  // (pedido 16-sep-2026): var COLV/op.filas/op.kpis/op.recuperable se
+  // siguen calculando arriba (op.hay ya se verifico), solo el PINTADO
+  // se corrio para despues del bloque de gestion (ge.hay).
+  var COLV = { C: 'var(--s1)', B: 'var(--s2)', A: 'var(--s3)' };
+
+  // =================================================================== 2
+  if (ge.hay) {
+    h += '<h2 class="sec">3 · Cuánto de esa bolsa alcanzamos a tocar</h2>' +
+      '<p class="sec-sub">la lista diaria que trabaja el equipo de rescate ' +
+      'sobre pacientes con crédito aprobado sin firmar' +
+      (ge.fuenteViva ? ' · ' + esc(ge.etiquetaPeriodo) : '') + '</p>';
+
+    // Si el rango elegido es anterior (o casi) al arranque del software, esta
+    // sección sale casi vacía — no porque falte dato sino porque la gestión
+    // con software no existía. Sin decirlo, un julio con "$0 firmado" se lee
+    // como que el equipo no hizo nada, cuando en realidad ese mes trabajó
+    // 3.706 casos con la operación anterior (y eso sí está en la gráfica).
+    var corteSw = (ge.kevin || {}).corteSoftware || '';
+    var finSel = document.getElementById('fHasta').value || '';
+    if (corteSw && finSel && finSel < corteSw) {
+      h += '<div class="aviso-foto">El rango elegido es <b>anterior al ' +
+        'arranque del software</b> (' + esc(corteSw) + '), así que esta ' +
+        'sección y las de abajo salen vacías: la lista diaria y sus causales ' +
+        'no existían todavía. Lo que el equipo hizo antes — casos trabajados, ' +
+        'firmas y plata — está en la gráfica de <b>“Cómo nos ha ido”</b>, ' +
+        'que sí cubre la operación anterior.</div>';
+    }
+    if (ge.filtroImposible) {
+      h += '<div class="aviso-foto">Esta sección <b>no responde al filtro ' +
+        'global</b>: la fuente de rescate todavía no trae el nombre de la ' +
+        'sede, así que no hay por dónde cruzarla. Los números son de toda la ' +
+        'operación.</div>';
+    }
+    if (!ge.fuenteViva && ge.foto) {
+      h += '<div class="aviso-foto"><b>Foto del ' + esc(ge.foto.fecha) +
+        ', sin fuente viva todavía.</b> Las tablas de ' +
+        'welli-growth.rescate aún no entran al refresh diario, así que estos ' +
+        'números no se mueven con el selector de fechas. El embudo es de ' +
+        esc(ge.foto.ventanaEmbudo) + ' y el pool de los ' +
+        esc(ge.foto.ventanaPool) + '.</div>';
+    }
+
+    // Un solo embudo, desde la bolsa hasta la firma, en casos y en plata.
+    h += '<div style="margin-top:10px">' +
+      panel('Qué pasó cuando llamamos',
+        'el embudo completo, de la bolsa a la firma · los porcentajes van ' +
+        'sobre la bolsa, no sobre el paso anterior' +
+        (cb.hay ? ' · ' + fNum(cb.sedes) + ' sedes en ' + fNum(cb.dias) +
+          ' días de operación' : ''),
+        embudoPlata(ge.embudo || [], {
+          nota: (cb.veces
+            ? 'el caso que entra vale ' + esc(fmt(cb.veces, 'x')) +
+              ' el promedio de la bolsa (' + fCopC(cb.ticketTrabajado) +
+              ' contra ' + fCopC(cb.ticketBolsa) +
+              '), así que la lista prioriza por monto y se nota'
+            : '')
+        })) +
+      '</div>';
+
+    // ================================================================= 3
+    var wa = ge.whatsapp;
+    h += '<h2 class="sec">4 · El embudo de WhatsApp</h2>' +
+      '<p class="sec-sub"><b>Solo pacientes RESCATABLES</b>: los que siguen ' +
+      'aprobados esperando actuar. Quedan fuera los que ya avanzaron ' +
+      '(desembolsado, fulfilled, pendiente de desembolso, pendiente de ' +
+      'aprobación del médico, pendiente de validación del cliente) — a ese ' +
+      'paciente el sistema no le manda la confirmación porque ya no la ' +
+      'necesita, y contarlo como “no le llegó” inventaba una falla que no ' +
+      'existe. El estado es la <b>foto de hoy</b>, no el del día de la ' +
+      'aprobación: por eso el universo de un mes ya cerrado puede encogerse ' +
+      'con el tiempo, a medida que esos pacientes desembolsan.<br>' +
+      'De esos rescatables: ' +
+      'a cuántos les llegó SU MENSAJE DE CONFIRMACIÓN DE CRÉDITO APROBADO ' +
+      '→ se entregó → se leyó · en vivo desde ' +
+      '<b>welli-growth.rescate.eventos_hilos</b> (el webhook propio, no la ' +
+      'plataforma de campañas vieja) · <b>única sección de rescate que SÍ ' +
+      'incluye CreditOp</b> — se acota por paciente, no por sede, y nunca ' +
+      'tuvo con qué excluirlo · "enviado/entregado/leído" identifican la ' +
+      'plantilla exacta de esa confirmación (no cualquier WhatsApp — ' +
+      'cobranza, bot, etc. quedan afuera a propósito) · "respondieron" (en ' +
+      'la tarjeta de abajo, fuera del embudo) es cualquier respuesta del ' +
+      'paciente después de su aprobación, no necesariamente a esta ' +
+      'confirmación — un mensaje entrante no dice a qué plantilla contesta, ' +
+      'así que puede ser MAYOR que "leído" y no cabe en la misma barra</p>';
+
+    if (wa && (wa.embudo || []).length) {
+      h += '<div style="margin-top:10px">' +
+        panel('A cuántos pacientes rescatables les llegó, y hasta dónde',
+          'cada etapa cuenta PACIENTES una sola vez (no mensajes, no por ' +
+          'día) · el % de cada etapa es sobre el total de rescatables, no ' +
+          'sobre el paso anterior · aprobados entre ' + esc(wa.periodo) +
+          (wa.yaAvanzaron
+            ? ' · además hubo ' + fNum(wa.yaAvanzaron) + ' aprobados en el ' +
+              'rango que ya avanzaron y quedan fuera de este embudo'
+            : ''),
+          embudoWa_(wa.embudo)) +
+        '</div>';
+      h += filaKPIs([
+        { label: 'Recibieron confirmación', valor: wa.contactados,
+          formato: 'num', sublabel: 'de ' + fNum(wa.universo) + ' pacientes ' +
+            'RESCATABLES del período · ' +
+            (wa.universo ? Math.round((wa.contactados / wa.universo) * 1000) / 10 : 0) +
+            '% recibió el mensaje de crédito aprobado' },
+        { label: 'Sin confirmación', valor: wa.universo - wa.contactados,
+          formato: 'num', sublabel: 'siguen aprobados esperando actuar y ' +
+            'nunca recibieron su mensaje · este es el hueco real que hay ' +
+            'que cerrar' },
+        // Aparte del embudo a propósito (26-sep-2026): no es un subconjunto
+        // de "Leído" (puede ser mayor, un paciente puede escribirle a Welli
+        // por otro motivo sin haber leído esta confirmación puntual), así
+        // que ponerlo en la misma barra se leía como un error visual.
+        { label: 'Respondieron algo', valor: wa.respondieron,
+          formato: 'num', sublabel: 'de ' + fNum(wa.universo) + ' rescatables · ' +
+            'cualquier respuesta por WhatsApp después de su aprobación, no ' +
+            'necesariamente a este mensaje' }
+      ]);
+      // Las tarjetas de "aprobados sin ningun mensaje / si recibieron" se
+      // quitaron (9-sep-2026, pedido explicito): dependian de
+      // RESCATE_APROB_MSJ_DIA, cuyo pull nunca se corrio (la conexion de
+      // BigQuery se cayo justo cuando se escribio), asi que se quedaron
+      // meses mostrando la foto fija de una sola fila sin decirlo con
+      // suficiente fuerza. En vez de seguir prometiendo un refresh que no
+      // llega, se retiraron. Si se retoma, el dato SI existe en el motor
+      // (armarF4_, bloque aprobMsj) — falta correr pull_aprob_msj.py con
+      // acceso a BigQuery restaurado y crear RESCATE_APROB_MSJ_DIA.
+    }
+
+    // ================================================================= 4
+    if ((ge.causales || []).length) {
+      h += '<h2 class="sec">5 · Por qué no lo toman</h2>' +
+        '<p class="sec-sub">las razones de los ' + fNum(ge.hablaron) +
+        ' casos que sí llegaron a una conversación</p>';
+
+      h += '<div style="margin-top:10px">' +
+        panelGraf('Lo que dijo quien contestó y habló',
+          'sobre los ' + fNum(ge.hablaron) + ' casos con conversación real · ' +
+          'la causal describe cómo terminó la llamada, no cómo terminó el caso',
+          'gF4Causal') +
+        '</div>';
+      pintar('gF4Causal', function (el) {
+        chBarrasH(el, (ge.causales || []).slice(0, 12).map(function (c) {
+          return { etiqueta: c.causal, y: c.casos, d: c };
+        }), { color: 'var(--s1)', formato: fNum, anchoEtiqueta: 230,
+          maxEtiqueta: 34,
+          detalle: function (d) {
+            return [{ nombre: 'Casos', valor: fNum(d.d.casos) },
+                    { nombre: '% de los que hablaron',
+                      valor: fPct(d.d.pctBase) },
+                    { nombre: '% de todos los trabajados',
+                      valor: fPct(d.d.pct) }];
+          } });
+      });
+    }
+
+    // El calendario: la gestión día a día, que es como se opera. Pedido
+    // 24-sep-2026: se corrio al final del bloque de gestion (despues de
+    // WhatsApp y de "por que no lo toman"), en vez de justo despues del
+    // embudo — asi los dos puntos numerados (4 y 5) quedan seguidos, y el
+    // dia-a-dia (que no tiene numero propio, es un detalle visual) cierra
+    // justo antes de "6 · La oportunidad".
+    if ((ge.calendario || []).length) {
+      h += '<div style="margin-top:12px">' +
+        panel('Día a día, de lunes a viernes',
+          'cuánto entró a la bolsa cada día, cuánto tocó el equipo y ' +
+          'cuánto se rescató · el tinte es la cobertura en plata',
+          calendarioGestion(ge.calendario, ge.stock, ge)) +
+        '</div>';
+    }
+
+  }
+
+  // =================================================================== 6
+  // Pedido 16-sep-2026: la oportunidad (tres ventanas) baja al final —
+  // los puntos 1 y 2 (metas y por que la meta es esa) se quedan arriba,
+  // el punto que antes era "4" (cuanto de la bolsa tocamos, con el
+  // dia-a-dia lunes a viernes) sube a ser el 3, y esto queda de cierre.
+  h += '<h2 class="sec">6 · La oportunidad: tres ventanas, una bolsa</h2>' +
+    '<p class="sec-sub">de los créditos que el motor APROBÓ en el período, ' +
+    'cuántos se firmaron solos y cuánta plata quedó sobre la mesa · ' +
+    esc(op.universo || '') + '</p>';
+
+  // Las tres ventanas. Una sola pieza por ventana: el comportamiento
+  // declarado y los numeros medidos en la misma tarjeta.
+  if ((op.filas || []).length) {
+    h += '<div class="grid3">' + op.filas.map(function (r) {
+      return '<div class="panel vent-card" style="border-top-color:' +
+        (COLV[r.id] || 'var(--borde)') + '">' +
+        '<h3>' + esc(r.id + ' · ' + r.nombre) + '</h3>' +
+        '<p class="sub">' + esc(r.especialidades) + '</p>' +
+        '<p class="vent-peso">' + fPct(r.pesoApr) + ' de los créditos del ' +
+        'período · ' + fPct(r.pesoMonto) + ' de la plata</p>' +
+        '<p style="margin:0;font-size:13px;color:var(--texto-2);' +
+        'line-height:1.5">' + esc(r.comportamiento) + '</p>' +
+        '<div class="vent-cifras">' +
+        '<div><b>' + fPct(r.pct) + '</b><span>cierra sin que nadie lo toque</span></div>' +
+        '<div><b>' + (r.dPct === null ? '--'
+          : (r.dPct > 0 ? '+' : '') + fNum(r.dPct) + ' pp') +
+        '</b><span>vs período anterior</span></div>' +
+        '<div><b>' + fNum(r.apr) + '</b><span>créditos aprobados</span></div>' +
+        '<div class="destaca"><b>' + fCopC(r.mSinCerrar) +
+        '</b><span>quedó sin firmar</span></div>' +
+        '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  // Lo que NO tiene ventana. Va declarado y no escondido: si las tres
+  // tarjetas no suman los KPIs de abajo, el lector asume que el tablero
+  // esta mal sumando.
+  h += filaKPIs(op.kpis || []);
+
+  // La bolsa: de lo aprobado sin firmar, cuanto todavia existe.
+  var rc = op.recuperable || {};
+  if (rc.mSinFirmar) {
+    var pv = rc.pctVivo || 0;
+    h += '<div style="margin-top:14px">' +
+      panel('De lo que quedó sin firmar, ¿cuánto todavía se puede rescatar?',
+        'el crédito aprobado vive ' + rc.dias + ' días · el corte es al ' +
+        esc(rc.corte),
+        '<div class="bolsa">' +
+        '<div class="bolsa-pista">' +
+        '<div class="bolsa-seg bolsa-vivo" style="width:' + pv + '%"></div>' +
+        '<div class="bolsa-seg bolsa-muerto" style="width:' + (100 - pv) +
+        '%"></div>' +
+        '</div>' +
+        '<div class="bolsa-pie">' +
+        '<div><b>' + fCopC(rc.mVivos) + '</b>' +
+        '<i class="i-vivo"></i>rescatable hoy · ' + fNum(rc.vivos) +
+        ' créditos dentro de sus ' + rc.dias + ' días (' + fPct(pv) + ')</div>' +
+        '<div><b>' + fCopC(rc.mVencidos) + '</b>' +
+        '<i class="i-muerto"></i>ya se venció · ' + fNum(rc.vencidos) +
+        ' créditos que habría que volver a radicar</div>' +
+        '</div></div>') +
+      '</div>';
+  }
+
+  return h;
+}
+
+/* El embudo de la gestion, en casos y en plata, desde la bolsa completa.
+
+   Reemplaza dos paneles: la cobertura a la izquierda y el embudo a la
+   derecha. Estaban separados y el lector tenia que cruzarlos a mano para
+   entender que el cierre no era sobre toda la oportunidad sino sobre el
+   pedazo que alcanzamos a tocar. Con la bolsa como primer paso eso se lee
+   de corrido y sin hacer cuentas.
+
+   Los porcentajes son SIEMPRE sobre la bolsa, no sobre el paso anterior:
+   encadenar porcentajes esconde el tamano real de cada fuga.
+
+   Tres tipos de paso, y la diferencia importa:
+     hito     la bolsa, la lista y la firma — los tres numeros que se citan
+     fuga     el paso no avanza el embudo, es la salida
+     cruzado  sale del cruce contra el credito y no del registro de la
+              llamada, asi que NO es un subconjunto del paso de arriba: la
+              plata firmada ($310 M) es mayor que la de los interesados
+              ($270 M) porque hay firmas registradas como "No contesta" */
+function embudoPlata(pasos, opt) {
+  opt = opt || {};
+  if (!(pasos || []).length) {
+    return '<div class="vacio-graf">Sin gestión en el período</div>';
+  }
+  var base = pasos[0] || {};
+  var maxC = base.casos || 0, maxM = base.monto || 0;
+  pasos.forEach(function (p) {
+    if (p.casos > maxC) maxC = p.casos;
+    if (p.monto > maxM) maxM = p.monto;
+  });
+  var h = '<div class="emb2">' +
+    '<div class="emb2-cab">' +
+    '<div></div><div>Casos</div><div>Plata</div>' +
+    '</div>';
+  pasos.forEach(function (p, i) {
+    var cls = 'emb2-fila' + (p.fuga ? ' es-fuga' : '') +
+      (p.hito ? ' es-hito' : '') + (p.cruzado ? ' es-cruzado' : '');
+    var wC = maxC ? Math.max(0.6, (p.casos / maxC) * 100) : 0;
+    var wM = (maxM && p.monto !== null) ? Math.max(0.6, (p.monto / maxM) * 100) : 0;
+    h += '<div class="' + cls + '">' +
+      '<div class="emb2-etq"><b>' + esc(p.paso) + '</b>' +
+      (p.sub ? '<span>' + esc(p.sub) + '</span>' : '') + '</div>' +
+      '<div class="emb2-mitad">' +
+      '<div class="emb2-pista"><div class="emb2-barra c" style="width:' +
+      wC + '%"></div></div>' +
+      '<div class="emb2-num"><b>' + fNum(p.casos) + '</b>' +
+      '<span>' + fPct(p.pct) + '</span></div>' +
+      '</div>' +
+      '<div class="emb2-mitad">' +
+      '<div class="emb2-pista"><div class="emb2-barra m" style="width:' +
+      wM + '%"></div></div>' +
+      '<div class="emb2-num"><b>' +
+      (p.monto === null ? '--' : fCopC(p.monto)) + '</b>' +
+      '<span>' + (p.pctMonto === null ? '--' : fPct(p.pctMonto)) +
+      '</span></div>' +
+      '</div>' +
+      '</div>';
+    // El salto de la bolsa a la lista es la cobertura: se rotula en el
+    // hueco entre las dos filas en vez de en un panel aparte.
+    if (i === 0 && pasos[1]) {
+      h += '<div class="emb2-salto">de esa bolsa, la lista alcanzó a tocar ' +
+        '<b>' + fPct(pasos[1].pct) + ' de los casos</b> y <b>' +
+        (pasos[1].pctMonto === null ? '--' : fPct(pasos[1].pctMonto)) +
+        ' de la plata</b>' + (opt.nota ? ' · ' + opt.nota : '') + '</div>';
+    }
+  });
+  h += '</div>';
+  return h;
+}
+
+/* Calendario de la gestion, lunes a viernes. En 19 dias de operacion no hay
+   un solo sabado ni domingo, asi que las dos columnas del fin de semana
+   solo servirian para dejar huecos.
+
+   El tinte de la celda codifica la cobertura EN PLATA sobre lo que entro
+   ese dia — un solo tono, claro a oscuro, que es lo que corresponde a una
+   magnitud. La cobertura pasa del 100% cuando la lista trabaja sobrantes
+   de dias anteriores, y esas celdas se marcan aparte en vez de recortarse
+   a 100: recortar borraria justo el dia en que se atacaron los pendientes. */
+function calendarioGestion(sem, stock, ge) {
+  ge = ge || {};
+  if (!(sem || []).length) {
+    return '<div class="vacio-graf">Sin gestión en el período</div>';
+  }
+  function nivel(c) {
+    if (c === null || c === undefined) return 0;
+    if (c >= 100) return 5;
+    if (c >= 60) return 4;
+    if (c >= 35) return 3;
+    if (c >= 15) return 2;
+    return 1;
+  }
+  var h = '<div class="cal">' +
+    '<div class="cal-fila cal-cab"><div class="cal-sem"></div>' +
+    ['lun', 'mar', 'mié', 'jue', 'vie'].map(function (d) {
+      return '<div class="cal-dow">' + d + '</div>';
+    }).join('') + '</div>';
+
+  sem.forEach(function (w) {
+    h += '<div class="cal-fila"><div class="cal-sem">' +
+      esc(etiquetaSemanaCorta(w.semana)) + '</div>';
+    w.dias.forEach(function (d) {
+      if (d.fueraRango) {
+        h += '<div class="cal-cel cal-fuera-rango"><span class="cal-dia">' +
+          d.dia + '</span></div>';
+        return;
+      }
+      if (!d.hubo) {
+        h += '<div class="cal-cel vacia"><span class="cal-dia">' + d.dia +
+          '</span><span class="cal-nada">' +
+          (d.sinCredito ? 'sin datos' : 'sin gestión') + '</span></div>';
+        return;
+      }
+      // Todo el detalle del dia va en el title: la celda muestra lo que se
+      // compara de un barrido y el resto queda a un hover de distancia.
+      var t = d.fecha + '\n' +
+        'Entró a la bolsa: ' + fNum(d.entroCasos) + ' casos · ' +
+          fCopC(d.entroMonto) + '\n' +
+        'Trabajado: ' + fNum(d.casos) + ' casos · ' +
+          (d.sinMonto ? 'monto no registrado' : fCopC(d.monto)) + '\n' +
+        'Contestó: ' + fNum(d.contesto) + ' · habló: ' + fNum(d.hablo) + '\n' +
+        'Firmó: ' + fNum(d.firmo) + ' · ' + fCopC(d.mFirmo) + '\n' +
+        'Cobertura en plata: ' +
+          (d.cobertura === null ? 'no calculable' : fPct(d.cobertura)) +
+        ' · en casos: ' +
+          (d.coberturaCasos === null ? '--' : fPct(d.coberturaCasos));
+      // El pie de la celda antes era "32 · 12 · 3": tres numeros pelados
+      // que no dicen a que corresponden. Ahora es una frase corta con la
+      // plata rescatada del dia como cierre, que es la pregunta que el
+      // dia responde y antes solo vivia en el tooltip.
+      h += '<div class="cal-cel n' + nivel(d.cobertura) +
+        (d.cobertura !== null && d.cobertura >= 100 ? ' desborde' : '') +
+        '" title="' + esc(t) + '">' +
+        '<span class="cal-dia">' + d.dia + '</span>' +
+        '<span class="cal-cob">' +
+        (d.cobertura === null ? '--' : fPct(d.cobertura)) + '</span>' +
+        '<span class="cal-hay">' +
+        (d.sinCredito ? 'crédito sin refrescar' : fCopC(d.entroMonto) + ' entró') +
+        '</span>' +
+        '<span class="cal-toc">' +
+        (d.sinMonto ? 'sin monto' : fCopC(d.monto)) + ' tocado</span>' +
+        '<span class="cal-pie">' + fNum(d.casos) + ' casos' +
+        (d.contesto ? ' · ' + fNum(d.contesto) + ' contestó' : '') +
+        '</span>' +
+        '<span class="cal-rescatado' + (d.firmo ? '' : ' cero') + '">' +
+        (d.firmo
+          ? fCopC(d.mFirmo) + ' rescatado <b>(' + fNum(d.firmo) + ')</b>'
+          : 'nada rescatado') +
+        '</span>' +
+        '</div>';
+    });
+    h += '</div>';
+  });
+  h += '</div>';
+
+  h += '<div class="cal-leyenda">' +
+    '<div class="cal-esc"><span>cobertura en plata</span>' +
+    [1, 2, 3, 4, 5].map(function (n) {
+      return '<i class="n' + n + '"></i>';
+    }).join('') + '<span>0% → 100%+</span></div>' +
+    '<div class="cal-clave">cada celda: <b>plata que entró</b> · <b>plata ' +
+    'tocada</b> · casos y contactos · y <b>plata rescatada</b> ese día</div>' +
+    '</div>';
+
+  return h;
+}
+
+/* Embudo de casos para WhatsApp: enviado -> entregado -> leido -> respondido.
+   Reutiliza el mismo lenguaje visual compacto (.embw) que el embudo de
+   Welli Points — no hay plata que mostrar aca, es puro conteo de mensajes. */
+function embudoWa_(pasos) {
+  var max = (pasos[0] && pasos[0].n) || 1;
+  return '<div class="embw">' + pasos.map(function (p) {
+    var w = Math.max(1, (p.n / max) * 100);
+    return '<div class="embw-fila' + (p.hito ? ' ultimo' : '') + '">' +
+      '<div class="embw-etq">' + esc(p.paso) + '</div>' +
+      '<div class="embw-pista"><div class="embw-barra" style="width:' + w +
+      '%"></div></div>' +
+      '<div class="embw-num"><b>' + fNum(p.n) + '</b>' +
+      '<span>' + fPct(p.pct) + '</span></div></div>';
+  }).join('') + '</div>';
+}
+
+/* Etiqueta corta de semana para el calendario: "25 ago" en vez del ISO
+   completo, que en una columna angosta obliga a partir la linea. */
+function etiquetaSemanaCorta(iso) {
+  var MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun',
+             'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  var m = Number(iso.substring(5, 7)) - 1;
+  return Number(iso.substring(8, 10)) + ' ' + (MES[m] || '');
+}
+
+/* Los limites del dato, al lado de los numeros y no en un pie de pagina.
+   Van aca porque cada uno cambia como se lee una cifra de arriba. */
+function limitesDato(lista, titulo) {
+  if (!(lista || []).length) return '';
+  var h = '<div class="limites"><div class="limites-tit">' +
+    esc(titulo || 'Qué NO dicen estos números') + '</div><ul>';
+  lista.forEach(function (t) { h += '<li>' + esc(t) + '</li>'; });
+  return h + '</ul></div>';
+}
+
+/* Celda de cambio: signo, color y unidad. Vive aparte porque la usan la
+   tabla de accion y la semanal, y antes estaba embebida en la primera. */
+function deltaCel(d, invertido, puntos) {
+  if (d === null || d === undefined) return '<span class="delta-cel">--</span>';
+  var bueno = invertido ? (d < 0) : (d > 0);
+  var cls = d === 0 ? 'plano' : (bueno ? 'sube' : 'baja');
+  var txt = (d === 0 ? '=' : (d > 0 ? '▲ +' : '▼ ')) + fNum(d) +
+    (puntos ? ' pp' : '%');
+  return '<span class="delta-cel ' + cls + '">' + txt + '</span>';
+}
+
+// ------------------------------------------------------------------ F5
+/* Welli Points con datos reales de welli-growth.wp_data. El frente ya no
+   pregunta "cuantas sedes entraron" (eso era adopcion de un programa) sino
+   las dos preguntas de marketing: el incentivo convierte, y le pagamos. */
+
+function vistaF5() {
+  var f = D.f5;
+  var cv = f.conversion || {};
+  var pg = f.pago || {};
+  var ad = f.adopcion || {};
+  var cr = f.cruce || {};
+  var co = f.correlacion || [];
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 5</div>' +
+    '<h1>Welli Points</h1>' +
+    '<p class="lead">La sede acumula puntos por desembolsar (de 1 a 24 según el monto) ' +
+    'y en concursos, y los cambia por plata a $2.000 el punto. Adopción de la ' +
+    'plataforma, y cómo se cruza con el desembolso.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  if (!f.hayBQ) {
+    return h;
+  }
+
+  var serie = f.serie || [];
+
+  // =================================================================== 1
+  // Lo primero que pide cualquiera que abra esta pestaña: ¿la sede
+  // siquiera usa la plataforma? Sin esto, nada de lo de abajo tiene con
+  // quién hablar.
+  if ((ad.kpis || []).length) {
+    h += '<h2 class="sec">1 · ¿Usan la plataforma WelliPoints?</h2>' +
+      '<p class="sec-sub">adopción de toda la base — no responde al filtro de origen, ' +
+      'es la misma foto que ve producto</p>';
+    h += filaKPIs(ad.kpis);
+    h += panel('Sedes que entran, y lo que desembolsan ese mismo día',
+      'últimos 60 días · sedes únicas con al menos un login (línea) y su plata ' +
+      'desembolsada ese mismo día (barras)',
+      leyenda([{ nombre: 'Sedes con login', color: 'var(--s1)' },
+               { nombre: 'Plata desembolsada', color: 'var(--s2)' }]), 'gF5Tendencia');
+    pintar('gF5Tendencia', function (el) {
+      chBarrasLinea2Ejes(el, (ad.tendencia || []).map(function (x) {
+        return { x: x.x, barra: x.monto, linea: x.sedes };
+      }), {
+        colorBarra: 'var(--s2)', colorLinea: 'var(--s1)',
+        nombreBarra: 'Plata desembolsada', nombreLinea: 'Sedes con login',
+        formatoEjeBarra: fCompacto, formatoEjeLinea: fNum,
+        formatoBarra: fCopC, gran: 'dia', alto: 220
+      });
+    });
+    h += panel('Adopción por segmento', 'de las sedes que alguna vez entraron, por mundo comercial',
+      '', 'gF5Mundo');
+    pintar('gF5Mundo', function (el) {
+      chBarrasH(el, (ad.mundo || []).map(function (m) { return { etiqueta: m.mundo, y: m.sedes }; }),
+        { color: 'var(--s3)', formato: fNum });
+    });
+    if ((ad.top || []).length) {
+      h += panel('Top 5 sedes más activas', 'por número de visitas registradas', tabla([
+        { k: 'sede', t: 'Sede', f: 'txt', txt: true },
+        { k: 'email', t: 'Correo', f: 'txt' },
+        { k: 'visitas', t: 'Visitas' }
+      ], ad.top.slice(0, 5)));
+      h += '<p class="sub" style="margin-top:10px">' +
+        fNum(ad.nuncaLogin || 0) + ' sedes habilitadas nunca han iniciado sesión.</p>';
+    }
+  }
+
+  // =================================================================== 2
+  h += '<h2 class="sec">2 · Las sedes que entran a la plataforma, ¿desembolsan más?</h2>' +
+    '<p class="sec-sub">promedio de plata desembolsada por sede, cada mes — sedes que ' +
+    'han iniciado sesión alguna vez en points.welli.com.co contra las que nunca han ' +
+    'entrado, dentro del universo habilitado</p>';
+
+  if (!cr.hay) {
+    h += avisoBox('Todavía no hay suficientes sedes con login para comparar los dos ' +
+      'grupos mes a mes.');
+  } else {
+    h += filaKPIs([
+      { label: 'Promedio con login', valor: cr.promCon, formato: 'cop',
+        sublabel: fNum(cr.nCon) + ' sedes han iniciado sesión alguna vez',
+        fuente: 'calculado · CREDITO_DIA x wp_dashboard_visitas', color: 'verde' },
+      { label: 'Promedio sin login', valor: cr.promSin, formato: 'cop',
+        sublabel: fNum(cr.nSin) + ' sedes habilitadas, nunca han entrado',
+        fuente: 'calculado · CREDITO_DIA x wellipoints_snapshot', color: 'azul' },
+      { label: 'Cuántas veces más', valor: cr.multiplicador, formato: 'x',
+        sublabel: 'promedio con login ÷ promedio sin login',
+        fuente: 'calculado', color: 'morado' }
+    ]);
+
+    h += panel('Desembolso promedio por sede, mes a mes',
+      'con login vs sin login, dentro de las sedes habilitadas en WelliPoints',
+      leyenda([{ nombre: 'Con login', color: 'var(--s4)' },
+               { nombre: 'Sin login', color: 'var(--s2)' }]), 'gF5Cruce');
+    pintar('gF5Cruce', function (el) {
+      chGrupos(el, cr.serie.map(function (x) { return x.mes; }), [
+        { nombre: 'Con login', color: 'var(--s4)',
+          valores: cr.serie.map(function (x) { return x.promCon; }) },
+        { nombre: 'Sin login', color: 'var(--s2)',
+          valores: cr.serie.map(function (x) { return x.promSin; }) }
+      ], { formato: fCop, formatoEje: fCompacto, gran: 'mes', alto: 220 });
+    });
+
+    // Un solo renglón, no un capítulo: esto es un cruce, no una prueba
+    // causal. Las sedes que entran a la plataforma tienden a ser tambien
+    // las mas grandes/activas por otras razones — el grafico muestra el
+    // patron que se pidio ver, no aisla la causa.
+    h += '<p class="sub" style="margin-top:8px">Es un cruce, no una prueba de causa: ' +
+      'las sedes que inician sesión también tienden a ser las más grandes y activas ' +
+      'por otras razones, no solo por usar la plataforma.</p>';
+  }
+
+  // =================================================================== 3
+  h += '<h2 class="sec">3 · Correlación: puntos ganados vs plata desembolsada, en el tiempo</h2>' +
+    '<p class="sec-sub">dos medidas de magnitud distinta (puntos y pesos), por eso van en ' +
+    'dos ejes — cada uno rotulado en el color de su serie</p>';
+  if (!co.length) {
+    h += avisoBox('Todavía no hay suficiente historia para esta serie.');
+  } else {
+    h += panel('WP ganados (barras) y plata desembolsada (línea), mes a mes', '',
+      leyenda([{ nombre: 'WP ganados', color: 'var(--s3)' },
+               { nombre: 'Plata desembolsada', color: 'var(--s2)' }]), 'gF5Correl');
+    pintar('gF5Correl', function (el) {
+      chBarrasLinea2Ejes(el, co.map(function (x) {
+        return { x: x.mes, barra: x.ganado, linea: x.desembolsado };
+      }), {
+        colorBarra: 'var(--s3)', colorLinea: 'var(--s2)',
+        nombreBarra: 'WP ganados', nombreLinea: 'Plata desembolsada',
+        formatoEjeBarra: fCompacto, formatoEjeLinea: fCopC,
+        formatoBarra: fNum, gran: 'mes', alto: 240
+      });
+    });
+  }
+
+  // =================================================================== 4
+  // Prioridad, no inventario: tres cifras (si convierte, si se paga, y
+  // cuánto ya se pagó). Los dos paneles visuales (embudo de "a quién le
+  // llega" y barra de "le pagamos") se quitaron el 21-sep-2026 a pedido
+  // de Emmanuel — quedan solo las tres tarjetas.
+  h += '<h2 class="sec">4 · Panorama del incentivo</h2>' +
+    '<p class="sec-sub">' + (f.mesCerrado ? 'último mes cerrado: ' + esc(f.mesCerrado) : '') +
+    ' · ¿el incentivo convierte, y cuando lo gana, se lo pagamos?</p>';
+  h += filaKPIs([
+    (cv.kpis || [])[3],
+    (pg.kpis || [])[6],
+    (pg.kpis || [])[0]
+  ].filter(Boolean));
+
+  // =================================================================== 2
+  h += '<h2 class="sec">5 · Cómo ha venido, mes a mes</h2>' +
+    '<p class="sec-sub">de los WP prometidos, cuántos se ganaron</p>';
+
+  h += panel('Tasa de conversión del incentivo',
+    'de los WP prometidos, cuántos se ganaron — incluye el mes en curso, parcial',
+    '', 'gF5Tasa');
+  pintar('gF5Tasa', function (el) {
+    chLinea(el, serie.map(function (x) {
+      return { x: x.mes, y: x.conversion, d: x };
+    }), { color: 'var(--s1)', formato: fPct, gran: 'mes', alto: 160,
+      corte: f.mesEnCurso || undefined, corteEtq: 'mes en curso, parcial' });
+  });
+
+  // =================================================================== 3
+  h += '<h2 class="sec">6 · Detalle: por qué</h2>' +
+    '<p class="sec-sub">qué incentivo mueve algo</p>';
+
+  /* Cual incentivo mueve: ordenado por sedes que ganaron, no por tamano.
+     Se cortan los incentivos con menos de 10 sedes y sin ganadores: son
+     media docena de filas en cero que solo alargan la tabla. Los ceros de
+     los incentivos GRANDES si se quedan, porque esos si son el hallazgo. */
+  var incTodos = (f.incentivos || []).slice().sort(function (a, b) {
+    return b.ganaron - a.ganaron || b.sedes - a.sedes;
+  });
+  var inc = incTodos.filter(function (x) { return x.ganaron > 0 || x.sedes >= 10; });
+  var fuera = incTodos.length - inc.length;
+  h += panel('Qué incentivo mueve algo',
+    'ordenado por sedes que efectivamente ganaron el punto' +
+    (fuera ? ' · se omiten ' + fuera + ' incentivos con menos de 10 sedes y ningún ganador'
+           : ''), tabla([
+      { k: 'incentivo', t: 'Incentivo', f: 'txt', txt: true },
+      { k: 'sedes', t: 'Sedes' },
+      { k: 'ganaron', t: 'Ganaron' },
+      { k: 'pctGanaron', t: '% que ganó', f: 'pct' },
+      { k: 'ofrecido', t: 'WP ofrec.' },
+      { k: 'ganado', t: 'WP ganados' },
+      { k: 'vigentes', t: 'Vigentes' },
+      { k: 'vencidos', t: 'Vencidos' }
+    ], inc));
+
+  return h;
+}
+
+// ------------------------------------------------------------------ F7
+/* El detalle pieza-por-pieza (mas abajo, dentro de vistaF7) ya NO tiene su
+   propio selector de workflow: sigue el filtro de cluster que vive en la
+   barra de arriba de Frente 7 (cmp-chip/f7SetFiltro), calculado en el
+   servidor (Code.gs, tocaCluster_) -- un segundo selector local hubiera
+   sido redundante con el que ya existe. Cambio 14-sep-2026: se elimino
+   este selector local (F7_PZ/f7PzSetSel/f7PzRender) y la tabla plana paso
+   a tarjetas visuales, ver vistaF7. */
+
+function vistaF6() {
+  var f = D.f6;
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 6</div>' +
+    '<h1>¿Se están adoptando los productos nuevos?</h1>' +
+    '<p class="lead">Marketing acompaña cada lanzamiento con comunicación y piezas ' +
+    'tácticas. Lo que se mide es la adopción del producto, no cuántas piezas se hicieron.</p>' +
+    '</div>';
+
+
+  /* Este frente se llena a mano y hoy esta vacio. Un panel con cinco "--"
+     resta credibilidad al tablero, asi que el estado vacio dice exactamente
+     que hay que escribir y donde, en vez de mostrar celdas en blanco. */
+  var nov = (f.novedades || []).filter(function (n) {
+    if (!n.producto) return false;
+    var tiene = (n.metricas || []).some(function (m) {
+      return m.valor !== '' && m.valor !== null && m.valor !== undefined;
+    });
+    return tiene || n.inversion || n.acciones;
+  });
+  if (!nov.length) {
+    h += '<div class="lectura alerta">Este frente todavía no tiene datos y por eso no ' +
+      'muestra tarjetas vacías. Es el único del tablero que se llena a mano: hay que ' +
+      'escribir una fila por producto en la hoja <b>NOVEDADES</b> del Sheet con el ' +
+      'nombre, el estado, la inversión y hasta cuatro métricas de adopción ' +
+      '(por ejemplo: sedes que lo usaron, solicitudes con el producto, monto). ' +
+      'Mientras esté vacío, el frente no puede responder si los lanzamientos se ' +
+      'están adoptando.</div>';
+    return h;
+  }
+
+  h += '<div class="grid2">' + nov.map(function (n) {
+    var cuerpo = '<p style="margin:0 0 10px;font-size:13px;color:var(--texto-2)">' +
+      esc(n.descripcion || '') + '</p>';
+    cuerpo += '<div class="flujo">';
+    (n.metricas || []).forEach(function (m) {
+      var v = (m.valor === '' || m.valor === null || m.valor === undefined)
+        ? '--' : esc(fNum(m.valor));
+      cuerpo += '<div class="paso"><div class="n">' + v +
+        '</div><div class="l">' + esc(m.nombre) + '</div></div>';
+    });
+    cuerpo += '<div class="paso"><div class="n">' +
+      (n.inversion ? esc(fCopC(n.inversion)) : '--') +
+      '</div><div class="l">inversión</div></div>';
+    cuerpo += '</div>';
+    if (n.acciones) {
+      cuerpo += '<p style="margin:10px 0 0;font-size:12px;color:var(--texto-3)">' +
+        '<b>Acciones:</b> ' + esc(n.acciones) + '</p>';
+    }
+    return panel(n.producto + (n.estado ? '  ·  ' + n.estado : ''), '', cuerpo);
+  }).join('') + '</div>';
+
+  return h;
+}
+
+/* =====================================================================
+   Filtro global de origen de sede
+   Aplica a Profundizacion, Rescate y Welli Points. Adquisicion no se
+   filtra: por definicion mide lo que trae marketing.
+   La lista de origenes NO esta escrita a mano: sale del catalogo que
+   devuelve el servidor, asi que si HubSpot gana un origen nuevo aparece
+   solo en el selector.
+   ===================================================================== */
+var ORIGENES_SEL = [];      // vacio = todos
+/* Lo elegido en cada uno de los tres roles: { hunter, farmer, cs }. Vacio en
+   un rol = ese rol no filtra. Los tres se combinan con Y. */
+var ROLES_SEL = {};
+var CATALOGO_ORIG = [];
+var PRESETS_ORIG = {};
+var ETIQ_PRESET = {};
+
+var ORDEN_GRUPO = ['marketing', 'comercial', 'alianzas', 'otros', 'sin_origen'];
+var NOMBRE_GRUPO = {
+  marketing: 'Marketing', comercial: 'Equipo comercial',
+  alianzas: 'Alianzas y marcas', otros: 'Otros', sin_origen: 'Sin origen'
+};
+
+function mismosOrigenes(a, b) {
+  if (a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) < 0) return false;
+  return true;
+}
+
+function etiquetaOrigen() {
+  if (!ORIGENES_SEL.length) return 'Todos los orígenes';
+  var claves = Object.keys(PRESETS_ORIG);
+  for (var i = 0; i < claves.length; i++) {
+    var k = claves[i];
+    if (k === 'todos') continue;
+    if (mismosOrigenes(PRESETS_ORIG[k] || [], ORIGENES_SEL)) {
+      return ETIQ_PRESET[k] || k;
+    }
+  }
+  if (ORIGENES_SEL.length === 1) return ORIGENES_SEL[0];
+  return ORIGENES_SEL.length + ' orígenes';
+}
+
+
+/** Pinta el panel. Se llama cada vez que llegan datos nuevos. */
+function pintarPanelOrigen() {
+  var pres = document.getElementById('poPresets');
+  var lista = document.getElementById('poLista');
+  if (!pres || !lista) return;
+
+  pres.innerHTML = Object.keys(PRESETS_ORIG).map(function (k) {
+    var sel = (k === 'todos')
+      ? ORIGENES_SEL.length === 0
+      : mismosOrigenes(PRESETS_ORIG[k] || [], ORIGENES_SEL);
+    return '<button class="po-preset" type="button" data-preset="' + esc(k) + '"' +
+      ' aria-pressed="' + (sel ? 'true' : 'false') + '">' +
+      esc(ETIQ_PRESET[k] || k) + '</button>';
+  }).join('');
+
+  var porGrupo = {};
+  CATALOGO_ORIG.forEach(function (o) {
+    var g = o.grupo || 'otros';
+    if (!porGrupo[g]) porGrupo[g] = [];
+    porGrupo[g].push(o);
+  });
+  var h = '';
+  ORDEN_GRUPO.forEach(function (g) {
+    var arr = porGrupo[g];
+    if (!arr || !arr.length) return;
+    h += '<div class="po-grupo">' + esc(NOMBRE_GRUPO[g] || g) + '</div>';
+    arr.forEach(function (o) {
+      var marcado = ORIGENES_SEL.indexOf(o.origen) >= 0;
+      h += '<label class="po-item"><input type="checkbox" value="' + esc(o.origen) + '"' +
+        (marcado ? ' checked' : '') + '>' +
+        '<span>' + esc(o.origen) + '</span>' +
+        '<span class="po-n">' + fNum(o.sedes) + '</span></label>';
+    });
+  });
+  lista.innerHTML = h;
+
+  var txt = document.getElementById('btnOrigenTxt');
+  if (txt) txt.textContent = etiquetaOrigen();
+}
+
+function leerChecksOrigen() {
+  var ins = document.querySelectorAll('#poLista input[type=checkbox]');
+  var out = [];
+  for (var i = 0; i < ins.length; i++) if (ins[i].checked) out.push(ins[i].value);
+  // Si estan todos marcados es lo mismo que "todos": se guarda vacio para
+  // que el servidor no compare 24 cadenas en cada fila.
+  if (out.length === CATALOGO_ORIG.length) return [];
+  return out;
+}
+
+function abrirPanelOrigen(abrir) {
+  var p = document.getElementById('panelOrigen');
+  var b = document.getElementById('btnOrigen');
+  if (!p || !b) return;
+  var visible = !p.classList.contains('oculto');
+  var q = (abrir === undefined) ? !visible : abrir;
+  p.classList.toggle('oculto', !q);
+  b.setAttribute('aria-expanded', q ? 'true' : 'false');
+}
+
+function montarFiltroOrigen() {
+  var btn = document.getElementById('btnOrigen');
+  var panel = document.getElementById('panelOrigen');
+  if (!btn || !panel) return;
+
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    abrirPanelOrigen();
+  });
+  panel.addEventListener('click', function (e) { e.stopPropagation(); });
+  document.addEventListener('click', function () { abrirPanelOrigen(false); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') abrirPanelOrigen(false);
+  });
+
+  document.getElementById('poPresets').addEventListener('click', function (e) {
+    var t = e.target;
+    while (t && t !== panel && !t.getAttribute('data-preset')) t = t.parentNode;
+    if (!t || t === panel) return;
+    var k = t.getAttribute('data-preset');
+    ORIGENES_SEL = (k === 'todos') ? [] : (PRESETS_ORIG[k] || []).slice();
+    pintarPanelOrigen();
+  });
+  document.getElementById('poLista').addEventListener('change', function () {
+    ORIGENES_SEL = leerChecksOrigen();
+    var txt = document.getElementById('btnOrigenTxt');
+    if (txt) txt.textContent = etiquetaOrigen();
+  });
+  document.getElementById('poNada').addEventListener('click', function () {
+    ORIGENES_SEL = [];
+    pintarPanelOrigen();
+  });
+  document.getElementById('poListo').addEventListener('click', function () {
+    ORIGENES_SEL = leerChecksOrigen();
+    abrirPanelOrigen(false);
+    cargar();
+  });
+}
+
+/** Cinta que recuerda el universo activo. Solo en los frentes filtrables. */
+function cintaOrigen() {
+  var m = (D && D.meta) || {};
+  var partes = [];
+  partes.push(m.origenTodos ? 'Todos los orígenes' : esc(m.origenEtiqueta || ''));
+  // El equipo va SIEMPRE que no sea "todos": sin decirlo, un conteo de sedes
+  // recortado por equipo se lee como el total del origen.
+  if (!m.rolesTodos) partes.push(esc(m.rolEtiqueta || ''));
+  var col = '<b>' + fNum(m.origenSedes || 0) + '</b> sedes';
+  if (!m.origenTodos || !m.rolesTodos) {
+    col = '<b>' + fNum(m.origenSedes || 0) + '</b> de ' +
+      fNum(m.origenSedesBase || 0) + ' sedes';
+  }
+  // Desde el 9-sep-2026 las deshabilitadas YA NO se excluyen (acordado con
+  // BI: su tablero tampoco las resta). Se declara igual — cuántas de las
+  // sedes de arriba están deshabilitadas — para que la baja siga siendo
+  // visible sin volver a restarla del conteo.
+  if (m.deshabilitadas) {
+    col += ' <span class="cinta-nota">· incluye ' + fNum(m.deshabilitadas) +
+      ' deshabilitadas</span>';
+  }
+  // Reatribuciones de origen: se declaran SIEMPRE que muevan algo. Un
+  // ajuste de atribución que no se dice es lo que revienta en un comité
+  // cuando alguien abre HubSpot al lado y no le cuadra.
+  var rt = m.reatribucion || {};
+  if (rt.sedes && (rt.reglas || []).length) {
+    var titulo = rt.reglas.map(function (R) { return R.nota; }).join(' · ');
+    col += ' <span class="cinta-nota" title="' + esc(titulo) + '">· ' +
+      fNum(rt.sedes) + ' sede' + (rt.sedes === 1 ? '' : 's') + ' reatribuida' +
+      (rt.sedes === 1 ? '' : 's') + ': ' +
+      rt.reglas.map(function (R) {
+        return esc(R.de) + ' → ' + esc(R.a) + ' (' + esc(R.desde) + ' a ' + esc(R.hasta) + ')';
+      }).join(', ') + '</span>';
+  }
+  return '<div class="cinta-origen">' + partes.join(' · ') + ' · ' + col + '</div>';
+}
+
+/* =====================================================================
+   Render y navegación
+   ===================================================================== */
+
+/* Impactos apagados. Arrancan todos encendidos; se apagan para aislar una
+   comunicacion. Vive fuera de la vista para sobrevivir a un repintado. */
+var IMP_OFF = {};
+
+/* Repinta SOLO la grafica y los chips, no la vista entera.
+   Con render() completo el navegador rehace el DOM desde arriba y la pagina
+   salta al inicio: hacer clic en un chip te sacaba de donde estabas. */
+function refrescarImpactos() {
+  var f = D.f7;
+  if (!f) return;
+  var cont = document.getElementById('gF7Serie');
+  if (cont) chSerieImpactos(cont, f.serie || [], f.impactos || [],
+    { vacio: 'Sin solicitudes de la cola larga en el período' });
+  var chips = document.getElementById('f7Chips');
+  if (chips) chips.innerHTML = chipsImpactos(f);
+}
+function toggleImpacto(id) {
+  if (IMP_OFF[id]) delete IMP_OFF[id]; else IMP_OFF[id] = true;
+  refrescarImpactos();
+}
+function impactosTodos(on) {
+  IMP_OFF = {};
+  if (!on) (D.f7.impactos || []).forEach(function (i) { IMP_OFF[i.id] = true; });
+  refrescarImpactos();
+}
+function impactosSoloWf(aud) {
+  IMP_OFF = {};
+  (D.f7.impactos || []).forEach(function (i) {
+    if (i.audiencia !== aud) IMP_OFF[i.id] = true;
+  });
+  refrescarImpactos();
+}
+
+/* El color dice el WORKFLOW, no el canal: es la pregunta del frente. El canal
+   pasa a codificacion secundaria — linea continua WhatsApp, punteada email —
+   que ademas es lo que hace legal el par verde/rosa en vision deutan. */
+var F7_COLOR = {
+  ESTRENA: 'var(--w1)', PERFILAMIENTO: 'var(--w2)', DESEMBOLSO: 'var(--w3)',
+  REACTIVAR: 'var(--w4)', RECONOCIMIENTO: 'var(--w5)'
+};
+function colorWf(aud) { return F7_COLOR[aud] || 'var(--texto-3)'; }
+
+function chipsImpactos(f) {
+  var imp = f.impactos || [];
+  if (!imp.length) return '';
+  // Los chips se agrupan por workflow para que el color tenga con que
+  // contrastar y para poder aislar un workflow de un clic.
+  var porAud = {}, orden = [];
+  imp.forEach(function (im) {
+    if (!porAud[im.audiencia]) { porAud[im.audiencia] = []; orden.push(im.audiencia); }
+    porAud[im.audiencia].push(im);
+  });
+  var h = '<div class="imp-barra">' +
+    '<button class="imp-todo" onclick="impactosTodos(true)">todos</button>' +
+    '<button class="imp-todo" onclick="impactosTodos(false)">ninguno</button></div>';
+  orden.forEach(function (aud) {
+    var lista = porAud[aud];
+    var enc = lista.filter(function (im) { return !IMP_OFF[im.id]; }).length;
+    h += '<div class="imp-grupo">' +
+      '<button class="imp-wf" onclick="impactosSoloWf(\'' + aud + '\')" ' +
+      'title="ver solo este workflow" style="--c:' + colorWf(aud) + '">' +
+      '<i></i>' + esc(lista[0].nombre) +
+      ' <small>' + enc + '/' + lista.length + '</small></button>';
+    lista.forEach(function (im) {
+      var on = !IMP_OFF[im.id];
+      h += '<button class="imp-chip' + (on ? ' on' : '') + '" ' +
+        'style="--c:' + colorWf(im.audiencia) + '" ' +
+        'onclick="toggleImpacto(\'' + im.id + '\')" ' +
+        'title="' + esc(im.nombre + ' · ' + im.pieza + ' · ' + im.canal + ' a ' +
+          fNum(im.sedes) + ' sedes' + (im.tramo > 1
+            ? ', repartidas en ' + im.tramo + ' días según fueron entrando al workflow: ' +
+              (im.dias || []).map(function (x) {
+                return etiquetaX(x.fecha, 'dia') + ' ' + fNum(x.sedes);
+              }).join(', ')
+            : '')) + '">' +
+        '<i class="' + (im.canal === 'WhatsApp' ? 'wa' : 'mail') + '"></i>' +
+        esc(etiquetaX(im.fecha, 'dia')) + ' · ' + esc(im.pieza) +
+        ' <small>' + fNum(im.sedes) +
+        (im.tramo > 1 ? ' · ' + im.tramo + 'd' : '') + '</small></button>';
+    });
+    h += '</div>';
+  });
+  return h;
+}
+
+/* Barras de solicitudes por dia con lineas verticales en los dias de impacto.
+   No es un eje doble: los impactos no tienen escala propia, son marcas de
+   evento sobre el eje de tiempo — la unica forma honesta de superponer un
+   evento a una serie.
+
+/* Barras de solicitudes por dia con lineas verticales en los dias de impacto.
+   No es un eje doble: los impactos no tienen escala propia, son marcas de
+   evento sobre el eje de tiempo — la unica forma honesta de superponer un
+   evento a una serie.
+
+   El COLOR dice el workflow y el trazo dice el canal (continuo WhatsApp,
+   punteado email). Cada marca lleva su etiqueta escrita: una marca que no
+   dice que es obliga a pasar el mouse para entender la grafica.
+
+   Los rotulos se reparten en CARRILES. Apilar por dia no basta: si dos
+   impactos caen en dias vecinos de un rango largo, sus etiquetas quedan a
+   pocos pixeles y se pisan hasta ser ilegibles. Se recorren de izquierda a
+   derecha y cada uno baja al primer carril libre, que es la colocacion
+   estandar para etiquetas de evento. */
+function chSerieImpactos(cont, serie, impactos, opt) {
+  opt = opt || {};
+  if (!serie || !serie.length) {
+    cont.innerHTML = '<div class="vacio-graf">' + esc(opt.vacio || 'Sin datos') + '</div>';
+    return;
+  }
+  // Desembolso ($) EN LA MISMA grafica, como linea de eje derecho -- pedido
+  // explicito 14-sep-2026 (se probo primero como panel aparte y no sirvio:
+  // "quiero que todo este en un mismo grafico"). Es un eje doble de verdad
+  // (dos escalas distintas), pero NO es el error de la seccion 5 de
+  // CLAUDE.md: aquella vez era una linea de META estatica (un solo valor
+  // horizontal) que se leia contra cualquiera de los dos ejes por error.
+  // Aca son dos SERIES reales que varian dia a dia, cada una con su propio
+  // eje rotulado en su color y su propia leyenda -- no hay un numero
+  // ambiguo que confundir.
+  var conMonto = opt.monto !== false && serie.some(function (p) { return p.monto; });
+  // Geometria horizontal primero: los carriles necesitan x() para saber donde
+  // cae cada marca, y la banda de etiquetas necesita los carriles para saber
+  // cuanto alto reservar.
+  var pl = 46, pr = conMonto ? 56 : 12, pb = 30;
+  var an = W - pl - pr;
+  var top = ejeMax(Math.max.apply(null, serie.map(function (p) { return p.y; }))) || 1;
+  var topMonto = conMonto
+    ? (ejeMax(Math.max.apply(null, serie.map(function (p) { return p.monto || 0; }))) || 1)
+    : 1;
+  var yM = function (v) { return pt + al - (v / topMonto) * al; };
+  var bw = an / serie.length;
+  var x = function (i) { return pl + i * bw; };
+
+  var idx = {};
+  serie.forEach(function (p, i) { idx[p.x] = i; });
+  var porDia = {};
+  (impactos || []).forEach(function (im) {
+    if (IMP_OFF[im.id] || idx[im.fecha] === undefined) return;
+    (porDia[im.fecha] = porDia[im.fecha] || []).push(im);
+  });
+
+  var marcas = [];
+  Object.keys(porDia).sort().forEach(function (fch) {
+    var n = porDia[fch].length;
+    porDia[fch].forEach(function (im, k) {
+      // Varios impactos del mismo dia caen en el mismo x y la ultima linea
+      // tapa a las anteriores. Se separan un par de pixeles para que las tres
+      // se vean; el dia sigue siendo el mismo.
+      var off = n > 1 ? (k - (n - 1) / 2) * 2.5 : 0;
+      marcas.push({ im: im, cx: x(idx[fch]) + bw / 2 + off });
+    });
+  });
+  marcas.sort(function (a, b) { return a.cx - b.cx; });
+  var finCarril = [];
+  marcas.forEach(function (m) {
+    m.etq = m.im.pieza + ' ' + fNum(m.im.sedes) +
+      (m.im.tramo > 1 ? ' ·' + m.im.tramo + 'd' : '');
+    m.ancho = m.etq.length * 5.3 + 14;
+    m.izq = (m.cx + m.ancho) > (W - 12);
+    var x0 = m.izq ? m.cx - m.ancho : m.cx;
+    var c = 0;
+    while (finCarril[c] !== undefined && finCarril[c] > x0 - 6) c++;
+    m.carril = c;
+    finCarril[c] = x0 + m.ancho;
+  });
+  var banda = marcas.length ? 12 + finCarril.length * 14 : 10;
+  var H = (opt.alto || 250) + banda;
+  var pt = banda, al = H - pt - pb;
+  var y = function (v) { return pt + al - (v / top) * al; };
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+    esc(opt.aria || 'solicitudes por día con los impactos marcados') + '">';
+  for (var g = 0; g <= 3; g++) {
+    var vy = top * g / 3;
+    s += '<line x1="' + pl + '" y1="' + y(vy).toFixed(1) + '" x2="' + (W - pr) +
+      '" y2="' + y(vy).toFixed(1) + '" stroke="var(--borde)" stroke-width="1"/>';
+    s += '<text x="' + (pl - 7) + '" y="' + (y(vy) + 3.5).toFixed(1) +
+      '" text-anchor="end" font-size="9.5" fill="var(--texto-3)">' +
+      esc(fNum(Math.round(vy))) + '</text>';
+    if (conMonto) {
+      s += '<text x="' + (W - pr + 7) + '" y="' + (yM(topMonto * g / 3) + 3.5).toFixed(1) +
+        '" text-anchor="start" font-size="9.5" fill="var(--s2)">' +
+        esc(fCopC(topMonto * g / 3)) + '</text>';
+    }
+  }
+  if (conMonto) {
+    s += '<text x="' + (pl - 7) + '" y="10" text-anchor="end" font-size="9.5" ' +
+      'font-weight="700" fill="var(--texto-3)">Solicitudes</text>';
+    s += '<text x="' + (W - pr + 7) + '" y="10" text-anchor="start" font-size="9.5" ' +
+      'font-weight="700" fill="var(--s2)">Desembolso</text>';
+  }
+
+  // Marcas antes que las barras, para no taparlas.
+  marcas.forEach(function (m) {
+    var im = m.im, col = colorWf(im.audiencia);
+    var dash = im.canal === 'WhatsApp' ? '' : ' stroke-dasharray="3 3"';
+    var yl = 8 + m.carril * 14;
+    s += '<line x1="' + m.cx.toFixed(1) + '" y1="' + yl + '" x2="' + m.cx.toFixed(1) +
+      '" y2="' + (pt + al) + '" stroke="' + col + '" stroke-width="1.5"' +
+      dash + ' opacity=".75"/>';
+    s += '<circle cx="' + m.cx.toFixed(1) + '" cy="' + yl + '" r="3.2" fill="' +
+      col + '"/>';
+    s += '<text x="' + (m.izq ? m.cx - 6 : m.cx + 6).toFixed(1) + '" y="' + (yl + 3.4) +
+      '" text-anchor="' + (m.izq ? 'end' : 'start') +
+      '" font-size="9.5" font-weight="700" fill="' + col + '">' +
+      esc(im.pieza) + '<tspan font-weight="400" fill="var(--texto-3)"> ' +
+      esc(fNum(im.sedes) + (im.tramo > 1 ? ' ·' + im.tramo + 'd' : '')) +
+      '</tspan></text>';
+  });
+
+  serie.forEach(function (p, i) {
+    var bwd = Math.max(2, bw * 0.62);
+    var bx = x(i) + (bw - bwd) / 2;
+    if (p.y) {
+      var yy = y(p.y), hh = pt + al - yy;
+      var r = Math.min(3, bwd / 2, hh);
+      s += '<path d="M' + bx + ' ' + (pt + al) + ' L' + bx + ' ' + (yy + r) +
+        ' Q' + bx + ' ' + yy + ' ' + (bx + r) + ' ' + yy +
+        ' L' + (bx + bwd - r) + ' ' + yy +
+        ' Q' + (bx + bwd) + ' ' + yy + ' ' + (bx + bwd) + ' ' + (yy + r) +
+        ' L' + (bx + bwd) + ' ' + (pt + al) + ' Z" fill="var(--s1)" opacity=".9"/>';
+    }
+    s += '<rect class="hit" data-i="' + i + '" x="' + x(i) + '" y="' + pt +
+      '" width="' + bw + '" height="' + al + '" fill="transparent"/>';
+  });
+
+  if (conMonto) {
+    var ptsMonto = '', trazando = false;
+    serie.forEach(function (p, i) {
+      var cx = x(i) + bw / 2, cy = yM(p.monto || 0);
+      ptsMonto += (trazando ? ' L' : ' M') + cx.toFixed(1) + ' ' + cy.toFixed(1);
+      trazando = true;
+    });
+    s += '<path d="' + ptsMonto + '" fill="none" stroke="var(--s2)" stroke-width="2" ' +
+      'stroke-linejoin="round" stroke-linecap="round"/>';
+    serie.forEach(function (p, i) {
+      if (!p.monto) return;
+      s += '<circle cx="' + (x(i) + bw / 2).toFixed(1) + '" cy="' + yM(p.monto).toFixed(1) +
+        '" r="2.6" fill="var(--s2)" stroke="var(--superficie)" stroke-width="1"/>';
+    });
+  }
+
+  s += '<line x1="' + pl + '" y1="' + (pt + al) + '" x2="' + (W - pr) + '" y2="' +
+    (pt + al) + '" stroke="var(--borde-fuerte)" stroke-width="1"/>';
+  var cada = Math.max(1, Math.ceil(serie.length / 11));
+  serie.forEach(function (p, i) {
+    if (i % cada && i !== serie.length - 1) return;
+    s += '<text x="' + (x(i) + bw / 2).toFixed(1) + '" y="' + (H - 10) +
+      '" text-anchor="middle" font-size="9.5" fill="var(--texto-3)">' +
+      esc(etiquetaX(p.x, 'dia')) + '</text>';
+  });
+  s += '</svg>';
+  cont.innerHTML = s;
+
+  var tt = montarTooltip(cont);
+  var svg = cont.querySelector('svg');
+  svg.querySelectorAll('.hit').forEach(function (hh) {
+    hh.addEventListener('mouseenter', function () {
+      var p = serie[Number(hh.getAttribute('data-i'))];
+      var det = [{ nombre: 'Solicitudes', valor: fNum(p.sol) },
+                 { nombre: 'Desembolsos', valor: fNum(p.des) },
+                 { nombre: 'Plata desembolsada', valor: fCopC(p.monto || 0) },
+                 { nombre: 'Sedes que aplicaron', valor: fNum(p.sedes) }];
+      (porDia[p.x] || []).forEach(function (im) {
+        var hoy = (im.dias || []).filter(function (x) { return x.fecha === p.x; })[0];
+        det.push({ nombre: im.nombre + ' · ' + im.canal,
+                   valor: im.pieza + ' a ' + fNum(hoy ? hoy.sedes : im.sedes) +
+                     ' sedes' + (im.tramo > 1
+                       ? ' (de ' + fNum(im.sedes) + ' en ' + im.tramo + ' días)' : '') });
+      });
+      var r = hh.getBoundingClientRect(), cr = svg.getBoundingClientRect();
+      tt.mostrar(r.left - cr.left + r.width / 2, r.top - cr.top + 30,
+        tooltipHTML(etiquetaX(p.x, 'dia'), det));
+    });
+    hh.addEventListener('mouseleave', function () { tt.ocultar(); });
+  });
+}
+
+/* Frente 7 · Long tail. La cadencia de los workflows contra las solicitudes
+   que produce la poblacion que tocan. */
+function vistaF7() {
+  var f = D.f7;
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 7 · long tail</div>' +
+    '<h1>Cuando tocamos la cola larga, ¿aplican más?</h1>' +
+    '<p class="lead">Los workflows impactan por cadencia: una pieza, un delay, ' +
+    'otra pieza. Acá se ve si eso mueve las solicitudes o solo gasta toques.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  // Filtro de cluster: acota TODO el frente (serie, impactos, workflows,
+  // KPIs) a una sola audiencia. "sin filtrar" muestra las cinco a la vez,
+  // que es como se ve hoy sin tocar nada.
+  var clusters = f.clusters || [];
+  if (clusters.length) {
+    h += '<div class="cmp-barra">' +
+      '<span class="cmp-tit">Cluster</span>' +
+      '<button class="cmp-chip' + (!f.filtroActivo ? ' on' : '') +
+      '" onclick="f7SetFiltro(\'\')">Todos</button>' +
+      clusters.map(function (c) {
+        return '<button class="cmp-chip' + (f.filtroActivo === c.clave ? ' on' : '') +
+          '" onclick="f7SetFiltro(\'' + esc(c.clave) + '\')">' +
+          esc(c.nombre) + ' <small>' + fNum(c.sedes) + '</small></button>';
+      }).join('') +
+      '</div>';
+  }
+
+  if (!f.hay) {
+    h += '<div class="vacio-graf">No hay sedes de la cola larga en este universo' +
+      (f.filtroActivo ? ' para este cluster' : '') + '. Prueba con otro origen' +
+      (f.filtroActivo ? ' o quita el filtro de cluster' : '') + '.</div>';
+    return h;
+  }
+  h += filaKPIs(f.kpis);
+
+  // --- la grafica con los impactos ---
+  var imp = f.impactos || [];
+  // El id permite repintar solo los chips al apagar un impacto, sin rehacer
+  // la vista entera: con render() completo la pagina saltaba al inicio.
+  var chips = imp.length
+    ? '<div class="imp-chips" id="f7Chips">' + chipsImpactos(f) + '</div>' : '';
+
+  h += '<div style="margin-top:14px">' +
+    panel('Solicitudes y desembolso por día, con los impactos que mandamos',
+      'barras y eje izquierdo = solicitudes · línea verde y eje derecho = ' +
+      'desembolso ($) · cada color de marca es un workflow · línea continua ' +
+      'WhatsApp, punteada email · una marca es una pieza de la cadencia, ' +
+      'aunque haya goteado varios días · apaga las que no quieras ver',
+      chips, 'gF7Serie') +
+    '</div>';
+  pintar('gF7Serie', function (el) {
+    chSerieImpactos(el, f.serie || [], imp,
+      { vacio: 'Sin solicitudes de la cola larga en el período' });
+  });
+
+  // --- esfuerzo contra resultado ---
+  h += '<h2 class="sec">La cadencia de cada workflow</h2>' +
+    '<p class="sec-sub">lo que está declarado en HubSpot, al lado de lo que ' +
+    'produjo la audiencia en el período</p>';
+  h += tabla([
+    { t: 'Workflow', k: 'nombre', f: 'txt', txt: true },
+    { t: 'Sedes', k: 'sedes' },
+    { t: 'Impactos', k: 'impactos' },
+    { t: 'Dura', k: 'dur', f: 'txt' },
+    { t: 'Solicitudes', k: 'solicitudes' },
+    { t: 'Sol/sede', k: 'solPorSede', f: 'txt' },
+    { t: 'Desembolsos', k: 'desembolsos' },
+    { t: 'Plata', k: 'monto', f: 'cop' },
+    { t: 'Plata/sede', k: 'montoPorSede', f: 'cop' },
+    { t: 'Estado', k: 'estado', f: 'txt' }
+  ], (f.workflows || []).map(function (w) {
+    return { nombre: w.nombre, sedes: w.sedes, impactos: w.impactos,
+             dur: w.duracion ? w.duracion + ' días' : '--',
+             solicitudes: w.solicitudes,
+             solPorSede: fNum(w.solPorSede),
+             desembolsos: w.desembolsos, monto: w.monto, montoPorSede: w.montoPorSede,
+             estado: w.vacio ? 'vacío' : (w.activo ? 'activo' : 'apagado') };
+  }));
+  if (f.notaCadencia) {
+    h += '<p class="sub" style="margin:8px 0 0">' + esc(f.notaCadencia) + '</p>';
+  }
+
+  // --- detalle pieza por pieza, como tarjetas visuales -------------------
+  // Pedido 14-sep-2026: quitar las tarjetas de "día X → día Y" (ya está la
+  // tabla de arriba con el resumen por workflow) y mostrar la pieza-por-
+  // pieza como tarjetas, no como tabla plana. Sigue el MISMO filtro de
+  // cluster de la barra de arriba (cmp-chip/f7SetFiltro) -- no hay un
+  // segundo selector de workflow: seria redundante con el que ya existe.
+  if ((f.piezas || []).length) {
+    h += '<h2 class="sec">Detalle: cómo le fue a cada pieza</h2>' +
+      '<p class="sec-sub">' + esc(f.notaPiezas || '') + '</p>';
+    h += '<div class="pieza-grid">' + f.piezas.map(function (p) {
+      var wa = p.canal === 'WhatsApp';
+      var texto = p.muestra || (wa ? '' : p.etiqueta);
+      var sinDato = p.sent === null;
+      return '<div class="pieza-card">' +
+        '<div class="pieza-cab"><i class="' + (wa ? 'wa' : 'mail') + '"></i>' +
+        '<b>' + esc(p.workflow.split(' + ')[0]) + '</b>' +
+        '<span class="pieza-dia">día ' + Math.round(p.dia) + '</span></div>' +
+        (texto ? '<p class="pieza-texto">' + esc(texto) + '</p>'
+               : '<p class="pieza-texto pieza-sin-texto">' + esc(p.etiqueta) + '</p>') +
+        (sinDato
+          ? '<p class="pieza-vacio">Sin volumen suficiente en este período</p>'
+          : '<div class="pieza-metricas">' +
+            '<div><b>' + fNum(p.sent) + '</b><span>enviados</span></div>' +
+            '<div><b>' + fNum(p.delivered) + '</b><span>entregados</span></div>' +
+            '<div><b>' + fPct(p.openrate) + '</b><span>' + (wa ? 'leído' : 'abierto') + '</span></div>' +
+            (wa
+              ? '<div><b>' + fNum(p.respondio) + '</b><span>respondió</span></div>'
+              : '<div><b>' + fPct(p.clickrate) + '</b><span>clic</span></div>') +
+            '</div>') +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  // --- franja horaria + top sedes (solo WhatsApp) -----------------------
+  var wa = f.wa || {};
+  if ((wa.franja || []).some(function (h2) { return h2.leidos || h2.respondio; })) {
+    h += '<h2 class="sec">¿A qué hora leen y responden el WhatsApp?</h2>' +
+      '<p class="sec-sub">' + esc(f.notaWa || '') + '</p>';
+    h += panel('Lecturas y respuestas por hora del día',
+      'hora de Bogotá · verde = leído · azul = respondió',
+      '', 'gF7Franja');
+    pintar('gF7Franja', function (el) {
+      var filt = wa.franja.filter(function (h2) { return h2.leidos || h2.respondio; });
+      chGrupos(el, filt.map(function (h2) { return h2.hora + ':00'; }), [
+        { nombre: 'Leído', valores: filt.map(function (h2) { return h2.leidos; }), color: 'var(--s1)' },
+        { nombre: 'Respondió', valores: filt.map(function (h2) { return h2.respondio; }), color: 'var(--s2)' }
+      ], { vacio: 'Sin datos de horario', aria: 'lecturas y respuestas por hora' });
+    });
+
+    // Pedido 14-sep-2026: el "top de sedes por lecturas" no decia nada de
+    // negocio (leer un WhatsApp no es una decision de la sede). Se
+    // reemplaza por el embudo real: cuantas llegan a tener telefono, de
+    // esas cuantas leen, y de esas cuantas RESPONDEN -- que es donde esta
+    // el hallazgo (casi nadie).
+    var emb = wa.embudo || {};
+    if (emb.tocadas) {
+      var pctTel = emb.tocadas ? Math.round((emb.con_tel / emb.tocadas) * 100) : 0;
+      var pctLeyo = emb.con_tel ? Math.round((emb.leyeron / emb.con_tel) * 100) : 0;
+      var pctResp = emb.leyeron ? Math.round((emb.respondieron / emb.leyeron) * 1000) / 10 : 0;
+      h += '<h3 class="sub-sec" style="margin-top:16px">¿Hasta dónde llega el contacto por WhatsApp?</h3>' +
+        '<p class="sec-sub">de las sedes tocadas, cuántas se pueden ubicar por teléfono, cuántas leen, cuántas responden</p>' +
+        '<div class="flujo">' +
+        '<div class="paso"><span class="n">' + fNum(emb.tocadas) + '</span>' +
+        '<span class="l">tocadas por WhatsApp</span></div>' +
+        '<span class="flecha">→</span>' +
+        '<div class="paso"><span class="n">' + fNum(emb.con_tel) + '</span>' +
+        '<span class="l">con teléfono en HubSpot · ' + pctTel + '%</span></div>' +
+        '<span class="flecha">→</span>' +
+        '<div class="paso"><span class="n">' + fNum(emb.leyeron) + '</span>' +
+        '<span class="l">leyeron al menos un mensaje · ' + pctLeyo + '% de las anteriores</span></div>' +
+        '<span class="flecha">→</span>' +
+        '<div class="paso"><span class="n">' + fNum(emb.respondieron) + '</span>' +
+        '<span class="l">respondieron de verdad · ' + pctResp + '%</span></div>' +
+        '</div>' +
+        '<p class="lectura' + (emb.respondieron === 0 ? ' alerta' : '') + '" style="margin-top:10px">' +
+        (emb.respondieron === 0
+          ? '<b>Nadie responde por texto.</b> De ' + fNum(emb.leyeron) + ' sedes que leyeron el mensaje, ' +
+            'cero contestaron por WhatsApp. Es un canal de <b>aviso</b>, no de conversación — si el mensaje ' +
+            'trae un botón o link (como "Agendar mi cupo"), la conversión real hay que medirla ahí, no en respuestas de texto.'
+          : fNum(emb.respondieron) + ' de ' + fNum(emb.leyeron) + ' que leyeron (' + pctResp +
+            '%) respondieron de verdad por WhatsApp.') +
+        '</p>';
+    }
+  }
+
+  if ((f.sinTocar || []).length) {
+    h += '<h2 class="sec">Audiencias que nadie está tocando</h2>' +
+      '<p class="sec-sub">tienen sedes y pieza asignada, pero su workflow está ' +
+      'apagado o vacío</p>';
+    h += tabla([
+      { t: 'Audiencia', k: 'nombre', f: 'txt', txt: true },
+      { t: 'Sedes', k: 'sedes' },
+      { t: 'Solicitudes del período', k: 'solicitudes' },
+      { t: 'Plata desembolsada', k: 'monto', f: 'cop' }
+    ], f.sinTocar);
+  }
+
+  h += cuali(f.textos);
+  return h;
+}
+
+/* Frente 8 — Segundos créditos (28-sep-2026).
+   El paciente que ya pagó y cerró su primer crédito puede tomar un segundo.
+   Ojo con la tarjeta de "aptos": es el disponible de HOY, y el que ya aplicó
+   deja de estar ahí (ver el comentario largo de armarF8_ en Code.gs). Por
+   eso el sublabel declara cuántos ya salieron del pool: sin esa línea, la
+   tarjeta se lee como "la base total", que es otra cosa. */
+function vistaF8() {
+  var f = D.f8 || {};
+
+  var h = '<div class="frente-head">' +
+    '<div class="eyebrow">Frente 8 · segundos créditos</div>' +
+    '<h1>El paciente que ya pagó, ¿vuelve por más?</h1>' +
+    '<p class="lead">Quien cerró su primer crédito con buen comportamiento de pago ' +
+    'puede tomar un segundo. Acá se ve cuántos están habilitados, cuántos ya ' +
+    'volvieron, y si al volver se quedan en la misma especialidad o cruzan a otra.</p>' +
+    '</div>';
+  h += cintaOrigen();
+
+  if (!f.hay) {
+    h += '<div class="vacio-graf">No hay pacientes aptos ni solicitudes de segundo ' +
+      'crédito en este universo. Prueba con otro origen.</div>';
+    return h;
+  }
+
+  h += filaKPIs(f.kpis);
+
+  // --- línea de tiempo: solicitudes contra desembolsos ---
+  var serie = f.serie || [];
+  h += '<h2 class="sec">Cómo viene el programa, día a día</h2>' +
+    '<p class="sec-sub">arrancó el 22 de septiembre de 2026 · la gráfica empieza en el ' +
+    'primer día con solicitudes reales, no en el inicio del filtro</p>';
+  h += panel('Solicitudes contra desembolsos, por día',
+    'las dos series se fechan por el día en que el paciente aplicó, así que ' +
+    '“desembolsos” es el subconjunto de esas mismas solicitudes que convirtió — ' +
+    'siempre va por debajo, nunca al lado',
+    '', 'gF8Serie');
+  pintar('gF8Serie', function (el) {
+    chGrupos(el,
+      serie.map(function (d) { return d.x; }),
+      [
+        { nombre: 'Solicitudes', color: 'var(--s1)',
+          valores: serie.map(function (d) { return d.solicitudes; }) },
+        { nombre: 'Desembolsos', color: 'var(--s2)',
+          valores: serie.map(function (d) { return d.desembolsos; }) }
+      ],
+      { vacio: 'Sin solicitudes de segundo crédito en el período', gran: 'dia' });
+  });
+
+  // --- Sankey de cross-selling ---
+  var rutas = f.rutas || [];
+  var totalR = 0;
+  rutas.forEach(function (r) { totalR += r.n; });
+  h += '<h2 class="sec">De qué venían y a qué volvieron</h2>' +
+    '<p class="sec-sub">' +
+    (totalR
+      ? fNum(f.cruzaron) + ' de ' + fNum(totalR) + ' pacientes cambiaron de ' +
+        'especialidad entre su primer crédito y el segundo — ese cruce es la ' +
+        'oportunidad de cross-selling, las bandas grises son los que repitieron'
+      : 'sin solicitudes en el período para trazar rutas') +
+    '</p>';
+  h += panel('Especialidad del 1er crédito → especialidad del 2º',
+    'el ancho de cada banda es la cantidad de pacientes · pasa el mouse para ' +
+    'ver el detalle y la plata de cada ruta',
+    '', 'gF8Rutas');
+  pintar('gF8Rutas', function (el) {
+    chSankey(el, rutas, {
+      vacio: 'Sin rutas de especialidad en el período seleccionado',
+      etqIzq: '1er crédito', etqDer: '2º crédito'
+    });
+  });
+
+  return h;
+}
+
+function render() {
+  var cont = document.getElementById('vistas');
+  var m = D.meta;
+
+  // Solo lo indispensable: cuándo se actualizó el dato. Los rangos ya se
+  // ven en el calendario, y el comparativo lo dice cada tarjeta.
+  document.getElementById('periodoInfo').innerHTML =
+    'Datos actualizados: <b>' + esc(m.ultimaActualizacion) + '</b>';
+
+  // marcas de "falta" en la navegación
+  var pend = { f1: D.f1.pendienteMeta, f4: D.f4.pendienteBQ, f5: D.f5.pendienteBQ };
+  Object.keys(pend).forEach(function (k) {
+    var el = document.querySelector('[data-pend="' + k + '"]');
+    if (el) el.classList.toggle('oculto', !pend[k]);
+  });
+
+  graficas = [];
+  var html;
+  if (VISTA === 'f1') html = vistaF1();
+  else if (VISTA === 'f2') html = vistaF2();
+  else if (VISTA === 'f4') html = vistaF4();
+  else if (VISTA === 'f5') html = vistaF5();
+  else if (VISTA === 'f6') html = vistaF6();
+  else if (VISTA === 'f7') html = vistaF7();
+  else if (VISTA === 'f8') html = vistaF8();
+  else html = vistaF1();
+
+  html += '<div class="pie">' +
+    'Tablero 360 Growth · WELLI. Los datos vienen del Google Sheet, que se actualiza con un ' +
+    'trigger diario a las 6:00 AM hora Colombia. Toda métrica sin fuente conectada aparece ' +
+    'como <b>--</b> con un badge que dice qué falta: en este tablero no se rellena nada con ' +
+    'estimaciones. Las métricas marcadas "foto de hoy" son contadores de estado de HubSpot ' +
+    'y no responden al filtro de fechas.' +
+    '</div>';
+
+  cont.innerHTML = html;
+  cont.classList.remove('oculto');
+  document.getElementById('cargando').classList.add('oculto');
+  dibujarPendientes();
+  // Los botones de dia/mes de la pauta se enganchan aqui porque el HTML se
+  // reinyecta completo en cada render.
+  document.querySelectorAll('.gran-sel button[data-g]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      setGranPauta(b.getAttribute('data-g'));
+    });
+  });
+  window.scrollTo(0, 0);
+}
+
+/* Si un frente nuevo no entra aca, irA() lo rebota a f1 y el boton del nav
+   se ve muerto aunque la vista este bien escrita: paso con f8 el 28-sep-2026
+   (el render y los datos estaban perfectos, el clic no llegaba). Agregar un
+   frente son CUATRO puntos, no tres: nav en dashboard.html, vistaFX(),
+   el dispatcher de render(), y esta lista. */
+var VISTAS_VALIDAS = ['f1', 'f2', 'f4', 'f5', 'f6', 'f7', 'f8'];
+
+function irA(v, sinHash) {
+  if (VISTAS_VALIDAS.indexOf(v) < 0) v = 'f1';
+  VISTA = v;
+  document.querySelectorAll('.nav-item').forEach(function (b) {
+    b.setAttribute('aria-current', b.getAttribute('data-vista') === v ? 'true' : 'false');
+  });
+  // El hash permite mandarle a alguien el link de un frente concreto.
+  if (!sinHash) {
+    try { history.replaceState(null, '', '#' + v); } catch (e) { location.hash = v; }
+  }
+  if (D) render();
+}
+
+function vistaDelHash() {
+  var h = String(location.hash || '').replace('#', '');
+  return VISTAS_VALIDAS.indexOf(h) >= 0 ? h : 'f1';
+}
+
+/* ------------------------------------------------------------- fechas */
+function iso(d) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+function lunes(d) {
+  var x = new Date(d.getTime());
+  var w = x.getDay();
+  x.setDate(x.getDate() + (w === 0 ? -6 : 1 - w));
+  return x;
+}
+
+/* ------------------------------------------------- rango de fechas */
+/* Un solo rango libre (desde / hasta). Antes eran dos selectores, mes y
+   semana-del-mes, para que el rango fuera siempre un periodo "redondo" del
+   negocio — pero eso impedia mirar una ventana real como un evento de cinco
+   dias a caballo entre dos meses. Con el rango libre el motor arma el
+   comparativo "periodo anterior" con la misma cantidad de dias inmediatamente
+   antes, asi que cualquier ventana tiene su contra-parte. */
+function v0(d) { return d.toISOString().substring(0, 10); }
+
+/* Un selector por ROL, cada uno con su gente. Tres controles porque son tres
+   asignaciones que CONVIVEN: a una sede la trae un hunter, la cultiva un
+   farmer y la retiene un CS.
+
+   Se combinan con Y: elegir hunter=Johanna y farmer=Viviana da las sedes que
+   trajo Johanna Y que hoy cultiva Viviana. Con O, agregar un filtro daria un
+   universo MAS grande, que es lo contrario de lo que espera quien filtra. */
+function montarSelectorOwner() {
+  var cat = (D && D.meta && D.meta.catalogoRoles) || [];
+  var cont = document.getElementById('filtrosOwner');
+  if (!cont || !cat.length) return;
+  cont.innerHTML = cat.map(function (c) {
+    var id = 'selRol_' + c.id;
+    var sel = ROLES_SEL[c.id] || '';
+    return '<div class="campo"><label for="' + id + '">' + esc(c.nombre) +
+      '</label><select id="' + id + '" data-rol="' + esc(c.id) + '">' +
+      '<option value="">— sin filtrar —</option>' +
+      (c.id === 'hunter' ? '<option value="__equipo__"' +
+        (sel === '__equipo__' ? ' selected' : '') + '>Equipo completo (los ' +
+        c.gente.length + ' hunters)</option>' : '') +
+      c.gente.map(function (g) {
+        return '<option value="' + esc(g.id) + '"' +
+          (sel === g.id ? ' selected' : '') + '>' + esc(g.nombre) +
+          ' (' + fNum(g.sedes) + ')</option>';
+      }).join('') + '</select></div>';
+  }).join('');
+  cont.querySelectorAll('select').forEach(function (sl) {
+    sl.addEventListener('change', function () {
+      ROLES_SEL = {};
+      cont.querySelectorAll('select').forEach(function (s2) {
+        if (s2.value) ROLES_SEL[s2.getAttribute('data-rol')] = s2.value;
+      });
+      cargar();
+    });
+  });
+}
+
+/* El rango de un mes, recortado a hoy si el mes no ha terminado. Ya no hay
+   selector de mes, pero sigue haciendo falta para el arranque: el tablero
+   abre en el mes en curso. */
+function rangoDeMes(m) {
+  var y = Number(m.substring(0, 4)), i = Number(m.substring(5, 7)) - 1;
+  var b = v0(new Date(Date.UTC(y, i + 1, 0)));
+  var hoy = iso(new Date());
+  if (b > hoy) b = hoy;
+  return { desde: m + '-01', hasta: b };
+}
+
+/** Deja los dos calendarios en el mes completo, sin recargar. */
+function aplicarSeleccionMes(m) {
+  var r = rangoDeMes(m);
+  document.getElementById('fDesde').value = r.desde;
+  document.getElementById('fHasta').value = r.hasta;
+}
+
+/* Con dos calendarios libres el usuario puede invertir el rango o dejar uno
+   vacio. En vez de recargar con un rango imposible (que el motor leeria como
+   un periodo de cero dias y pintaria todo en blanco), se corrige aca y se
+   avisa en la cinta de estado. */
+function aplicarSeleccion(recargar) {
+  var ia = document.getElementById('fDesde');
+  var ib = document.getElementById('fHasta');
+  var a = ia.value, b = ib.value;
+  if (!a && !b) return;
+  if (!a) a = b;
+  if (!b) b = a;
+  if (a > b) { var t = a; a = b; b = t; }   // invertido: se endereza
+  ia.value = a;
+  ib.value = b;
+  if (recargar !== false) cargar();
+}
+
+/* -------------------------------------------------------------- carga */
+function cargar() {
+  if (CARGANDO) return;
+  CARGANDO = true;
+  var ini = document.getElementById('fDesde').value;
+  var fin = document.getElementById('fHasta').value;
+  var orig = ORIGENES_SEL.slice();
+  document.getElementById('vistas').classList.add('oculto');
+  document.getElementById('error').classList.add('oculto');
+  document.getElementById('cargando').classList.remove('oculto');
+
+  function ok(datos) {
+    CARGANDO = false;
+    D = datos;
+    // El catalogo llega siempre completo, sin importar el filtro activo.
+    if (D.meta) {
+      CATALOGO_ORIG = D.meta.catalogoOrigenes || CATALOGO_ORIG;
+      PRESETS_ORIG = D.meta.presetsOrigen || PRESETS_ORIG;
+      ETIQ_PRESET = D.meta.etiquetasPreset || ETIQ_PRESET;
+      if (D.meta.origenes) ORIGENES_SEL = D.meta.origenes.slice();
+      // ROLES_SEL lo manda el frontend y el motor lo devuelve tal cual en
+      // meta.roles, asi que se puede sincronizar sin perder nada.
+      if (D.meta.roles) ROLES_SEL = D.meta.roles;
+      montarSelectorOwner();
+      // Los dos calendarios se dejan en el rango que el motor confirma que
+      // uso, no en el que el usuario tecleo: si el motor lo recorto (por
+      // ejemplo el fin a hoy), los inputs tienen que decir la verdad.
+      if (D.meta.inicio) document.getElementById('fDesde').value = D.meta.inicio;
+      if (D.meta.fin) document.getElementById('fHasta').value = D.meta.fin;
+    }
+    pintarPanelOrigen();
+    render();
+  }
+  function mal(err) {
+    CARGANDO = false;
+    document.getElementById('cargando').classList.add('oculto');
+    var e = document.getElementById('error');
+    e.innerHTML = '<b>No se pudo leer el Sheet.</b><br>' + esc(err && err.message ? err.message : err) +
+      '<br><br>Revisa que SHEET_ID en Config.gs sea correcto y que el dueño del script tenga ' +
+      'acceso al Google Sheet.';
+    e.classList.remove('oculto');
+  }
+
+  // Vista previa: corre el MISMO getDashboardData() del servidor sobre las
+  // tablas embebidas, con shims de las APIs de Google. Antes traia payloads
+  // pre-calculados por rango de fecha, y como el tablero solo tiene
+  // calendario (sin atajos), cualquier fecha elegida a mano no existia en el
+  // diccionario, caia al payload de respaldo y el filtro de origen parecia
+  // no hacer nada. Ahora cualquier combinacion se calcula en vivo.
+  if (window.MOTOR_LOCAL) {
+    setTimeout(function () {
+      try {
+        ok(getDashboardData(ini, fin, orig, ROLES_SEL, CMP_F2, F7_FILTRO_AUD));
+      } catch (e) {
+        mal(e);
+      }
+    }, 20);
+    return;
+  }
+  if (window.DATOS_PRECARGADOS) {
+    setTimeout(function () { ok(window.DATOS_PRECARGADOS); }, 60);
+    return;
+  }
+  google.script.run.withSuccessHandler(ok).withFailureHandler(mal)
+    .getDashboardData(ini, fin, orig, ROLES_SEL, CMP_F2, F7_FILTRO_AUD);
+}
+
+/* --------------------------------------------------------------- tema */
+function aplicarTema(t) {
+  document.documentElement.setAttribute('data-tema', t);
+  try { localStorage.setItem('welli-tema', t); } catch (e) {}
+  if (D) render();     // las gráficas leen los colores por variable CSS
+}
+
+/* --------------------------------------------------------------- init */
+document.addEventListener('DOMContentLoaded', function () {
+  // Prioridad del tema: lo que el usuario eligió aquí > el tema que el
+  // contenedor ya impuso (data-theme, cuando el tablero va embebido) >
+  // la preferencia del sistema.
+  var raiz = document.documentElement;
+  var host = raiz.getAttribute('data-theme');
+  var t = (host === 'dark') ? 'oscuro' : (host === 'light' ? 'claro' : null);
+  try {
+    t = localStorage.getItem('welli-tema') || t;
+  } catch (e) {}
+  if (!t) {
+    t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      ? 'oscuro' : 'claro';
+  }
+  raiz.setAttribute('data-tema', t);
+
+  document.getElementById('btnTema').addEventListener('click', function () {
+    aplicarTema(document.documentElement.getAttribute('data-tema') === 'oscuro'
+      ? 'claro' : 'oscuro');
+  });
+  montarFiltroOrigen();
+  document.getElementById('btnAplicar').addEventListener('click', function () {
+    aplicarSeleccion(true);
+  });
+  // Los dos calendarios recargan solos al cambiar: con un rango libre, tener
+  // que darle además a "Aplicar" es un paso de más (el boton se queda para
+  // reintentar sin tocar las fechas).
+  ['fDesde', 'fHasta'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', function () {
+      aplicarSeleccion(true);
+    });
+  });
+  document.querySelectorAll('.nav-item').forEach(function (b) {
+    b.addEventListener('click', function () { irA(b.getAttribute('data-vista')); });
+  });
+
+  irA(vistaDelHash(), true);
+  window.addEventListener('hashchange', function () { irA(vistaDelHash(), true); });
+
+  // Arranca en el mes en curso. Si lleva menos de una semana se abre el
+  // anterior: un mes de dos dias se lee como una caida y no es lo primero
+  // que alguien deberia ver. De ahi en adelante el rango es libre.
+  var hoy0 = new Date();
+  var diaHoy = Number(iso(hoy0).substring(8, 10));
+  var mesArranque = iso(hoy0).substring(0, 7);
+  if (diaHoy < 7) {
+    var yy = hoy0.getFullYear(), mm = hoy0.getMonth() - 1;
+    mesArranque = iso(new Date(yy, mm, 1)).substring(0, 7);
+  }
+  aplicarSeleccionMes(mesArranque);
+  cargar();
+});
+</script>

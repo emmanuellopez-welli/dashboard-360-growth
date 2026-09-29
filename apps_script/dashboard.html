@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es" data-tema="claro">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tablero 360 Growth — WELLI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <?!= include('styles'); ?>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-fila">
+    <div class="marca">
+      <img src="data:image/png;base64,__LOGO_B64__" alt="WELLI">
+      <span class="marca-txt">
+        <b>WELLI</b>
+        <span id="marcaSub">Tablero 360 · filtrable por origen de sede</span>
+      </span>
+    </div>
+    <button class="btn btn-fantasma" id="btnTema" type="button" title="Claro / oscuro">◐ Tema</button>
+    <button class="btn" id="btnAplicar" type="button">Aplicar</button>
+  </div>
+
+  <div class="filtros">
+    <!-- Un solo rango libre: fecha inicio y fecha fin. Antes eran dos
+         selectores (mes + semana del mes) que solo dejaban armar rangos
+         "redondos"; el negocio necesita cualquier ventana (un evento de
+         cinco dias, medio mes, dos meses). Estos dos inputs SON la entrada
+         real de cargar(), asi que todo el tablero cuelga de ellos. -->
+    <div class="campo">
+      <label for="fDesde">Desde</label>
+      <input type="date" id="fDesde">
+    </div>
+    <div class="campo">
+      <label for="fHasta">Hasta</label>
+      <input type="date" id="fHasta">
+    </div>
+
+    <!-- Tres filtros globales de owner, uno por equipo, cada uno con su
+         gente. Cortan el universo de sedes igual que el de origen, asi que
+         aplican a los seis frentes. Se combinan entre si y con el de origen:
+         lo elegido en los tres se suma. -->
+    <div id="filtrosOwner" class="owner-wrap"></div>
+
+    <!-- Filtro global de origen de la sede. Corta el mismo universo. -->
+    <div class="campo campo-origen">
+      <label for="btnOrigen">Origen de la sede</label>
+      <button class="sel-origen" id="btnOrigen" type="button"
+              aria-haspopup="true" aria-expanded="false">
+        <span id="btnOrigenTxt">Todos los orígenes</span>
+        <span class="caret">▾</span>
+      </button>
+      <div class="panel-origen oculto" id="panelOrigen" role="dialog"
+           aria-label="Elegir orígenes">
+        <div class="po-presets" id="poPresets"></div>
+        <div class="po-lista" id="poLista"></div>
+        <div class="po-pie">
+          <button class="btn-fantasma po-mini" id="poNada" type="button">Ninguno</button>
+          <button class="btn po-mini" id="poListo" type="button">Aplicar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="periodo-info" id="periodoInfo"></div>
+</header>
+
+<div class="cuerpo">
+  <nav class="sidebar" aria-label="Frentes">
+    <div class="nav-titulo">Frentes</div>
+    <button class="nav-item" data-vista="f1" aria-current="true">
+      <span class="nav-num">F1</span> Adquisición
+      <span class="nav-pend oculto" data-pend="f1">falta</span>
+    </button>
+    <button class="nav-item" data-vista="f2">
+      <span class="nav-num">F2·3</span> Profundización
+    </button>
+    <button class="nav-item" data-vista="f4">
+      <span class="nav-num">F4</span> Rescate
+      <span class="nav-pend oculto" data-pend="f4">falta</span>
+    </button>
+    <button class="nav-item" data-vista="f5">
+      <span class="nav-num">F5</span> Welli Points
+      <span class="nav-pend oculto" data-pend="f5">falta</span>
+    </button>
+    <button class="nav-item" data-vista="f6">
+      <span class="nav-num">F6</span> Novedades
+      <span class="nav-pend" data-pend="f6">mockup</span>
+    </button>
+    <button class="nav-item" data-vista="f7">
+      <span class="nav-num">F7</span> Long tail
+    </button>
+    <button class="nav-item" data-vista="f8">
+      <span class="nav-num">F8</span> Segundos créditos
+    </button>
+  </nav>
+
+  <main class="contenido">
+    <div id="cargando" class="cargando"><span class="spin"></span> Leyendo el Sheet y cortando por fechas…</div>
+    <div id="error" class="error-caja oculto"></div>
+    <div id="vistas" class="oculto"></div>
+  </main>
+</div>
+
+<?!= include('scripts'); ?>
+</body>
+</html>

@@ -1,0 +1,1361 @@
+<style>
+/* =====================================================================
+   Tablero 360 Growth — WELLI
+   Marca: amarillo #FFCE00 predominante, azul #4C7DFF jerarquía,
+   morado #8C65C9 solo acentos, texto #141310 (nunca como fondo).
+   Tipografía Inter, fallback Arial. "WELLI" siempre en mayúsculas.
+
+   Los colores de MARCA se usan en el chrome (header, sidebar, badges).
+   Los colores de SERIE de las gráficas son pasos derivados de marca que
+   sí pasan contraste y separación para daltonismo — el #FFCE00 puro
+   tiene 1.45:1 contra blanco y no sirve como marca de dato.
+   ===================================================================== */
+
+:root {
+  /* marca */
+  --welli-amarillo: #FFCE00;
+  --welli-azul: #4C7DFF;
+  --welli-morado: #8C65C9;
+  --welli-tinta: #141310;
+  --welli-crema: #FFF4C4;
+  --welli-nube: #EBEFF7;
+
+  /* superficies y texto */
+  --fondo: #F7F7F5;
+  --superficie: #FFFFFF;
+  --superficie-2: #FBFBF9;
+  --borde: #E4E4DF;
+  --borde-fuerte: #CFCFC8;
+  --texto: #141310;
+  --texto-2: #5A5852;
+  --texto-3: #8B8880;
+
+  /* series de gráfica — validadas en claro sobre #FFFFFF */
+  --s1: #3D63D8;   /* azul     */
+  --s2: #B88400;   /* ámbar    */
+  --s3: #8B3FA8;   /* morado   */
+  --s4: #1E8E5A;   /* verde    */
+  /* Un color por workflow del long tail. El orden es el de la cadencia
+     (01..05) y es el orden en que se validaron: mover uno obliga a volver a
+     correr validate_palette.js, porque lo que se valida son los pares
+     ADYACENTES. El canal va como codificacion secundaria (linea continua o
+     punteada), que es lo que hace legible el par verde/rosa en deutan. */
+  --w1: #8B3FA8;   /* 01 estrena        morado */
+  --w2: #B88400;   /* 02 perfilamiento  ámbar  */
+  --w3: #0891B2;   /* 03 desembolso     cyan   */
+  --w4: #BE185D;   /* 04 reactivar      rosa   */
+  --w5: #166534;   /* 05 reconocimiento verde  */
+
+  /* semáforo */
+  --ok: #15803D;
+  --alerta: #A16207;
+  --mal: #B91C1C;
+  --ok-bg: #E8F5EC;
+  --alerta-bg: #FEF6E0;
+  --mal-bg: #FDECEC;
+
+  --radio: 12px;
+  --sombra: 0 1px 2px rgba(20,19,16,.05), 0 1px 8px rgba(20,19,16,.04);
+  --sidebar-w: 232px;
+  --header-h: 118px;
+}
+
+:root[data-tema="oscuro"] {
+  --fondo: #101114;
+  --superficie: #17181C;
+  --superficie-2: #1D1F24;
+  --borde: #2A2C33;
+  --borde-fuerte: #3A3D46;
+  --texto: #F2F2EF;
+  --texto-2: #A8A8A2;
+  --texto-3: #78786F;
+
+  /* re-escalonadas para el fondo oscuro, no un flip automático */
+  --s1: #5C82F0;
+  --s2: #B88400;
+  --s3: #A855C8;
+  --s4: #22A56B;
+  --w1: #A855C8;
+  --w2: #B8890A;
+  --w3: #1CA3C4;
+  --w4: #E05A87;
+  --w5: #15803D;
+
+  --ok: #4ADE80;
+  --alerta: #FCD34D;
+  --mal: #F87171;
+  --ok-bg: #14301F;
+  --alerta-bg: #332A10;
+  --mal-bg: #351818;
+
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 1px 8px rgba(0,0,0,.3);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 14px/1.5 'Inter', Arial, -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------ HEADER */
+.header {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borde);
+  padding: 12px 20px 0;
+}
+
+.header-fila {
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+}
+
+.marca { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.marca img { height: 34px; width: auto; display: block; }
+.marca-txt { display: flex; flex-direction: column; line-height: 1.15; }
+.marca-txt b {
+  font-size: 15px; font-weight: 800; letter-spacing: .06em;
+}
+.marca-txt span { font-size: 11px; color: var(--texto-3); }
+
+.filtros {
+  display: flex; align-items: flex-end; gap: 10px;
+  flex-wrap: wrap; padding: 10px 0 12px;
+}
+
+.campo { display: flex; flex-direction: column; gap: 4px; }
+.campo label {
+  font-size: 10px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--texto-3);
+}
+.campo input, .campo select {
+  font: inherit; font-size: 13px;
+  padding: 7px 9px;
+  border: 1px solid var(--borde-fuerte);
+  border-radius: 8px;
+  background: var(--superficie);
+  color: var(--texto);
+  min-height: 34px;
+}
+.campo input:focus, .campo select:focus {
+  outline: 2px solid var(--welli-azul); outline-offset: 1px; border-color: var(--welli-azul);
+}
+
+.presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.preset {
+  font: inherit; font-size: 12px; font-weight: 600;
+  padding: 7px 11px; min-height: 34px;
+  border: 1px solid var(--borde-fuerte);
+  border-radius: 999px;
+  background: var(--superficie);
+  color: var(--texto-2);
+  cursor: pointer;
+}
+.preset:hover { border-color: var(--welli-azul); color: var(--welli-azul); }
+.preset[aria-pressed="true"] {
+  background: var(--welli-amarillo); border-color: var(--welli-amarillo);
+  color: var(--welli-tinta);
+}
+
+.btn {
+  font: inherit; font-size: 13px; font-weight: 700;
+  padding: 8px 14px; min-height: 34px;
+  border: 0; border-radius: 8px;
+  background: var(--welli-azul); color: #fff;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(.93); }
+.btn-fantasma {
+  background: transparent; color: var(--texto-2);
+  border: 1px solid var(--borde-fuerte);
+}
+.btn-fantasma:hover { color: var(--welli-azul); border-color: var(--welli-azul); }
+
+.periodo-info {
+  font-size: 11.5px; color: var(--texto-3);
+  padding-bottom: 12px;
+  display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+}
+.periodo-info b { color: var(--texto-2); font-weight: 600; }
+
+/* ----------------------------------------------------------- LAYOUT */
+.cuerpo { display: flex; align-items: flex-start; }
+
+.sidebar {
+  position: sticky; top: var(--header-h);
+  width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
+  padding: 18px 12px;
+  max-height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+}
+.nav-titulo {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--texto-3);
+  padding: 0 10px 8px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  padding: 9px 10px; margin-bottom: 2px;
+  border: 0; border-radius: 9px;
+  background: transparent; color: var(--texto-2);
+  cursor: pointer;
+}
+.nav-item:hover { background: var(--superficie); color: var(--texto); }
+.nav-item[aria-current="true"] {
+  background: var(--superficie); color: var(--texto);
+  box-shadow: inset 3px 0 0 var(--welli-amarillo), var(--sombra);
+}
+.nav-num {
+  font-size: 10px; font-weight: 800; color: var(--texto-3);
+  min-width: 18px;
+}
+.nav-item[aria-current="true"] .nav-num { color: var(--welli-azul); }
+.nav-pend {
+  margin-left: auto; font-size: 9px; font-weight: 800;
+  padding: 2px 6px; border-radius: 999px;
+  background: var(--alerta-bg); color: var(--alerta);
+}
+
+.contenido {
+  flex: 1 1 auto; min-width: 0;
+  padding: 18px 22px 60px;
+}
+
+/* ------------------------------------------------------- ENCABEZADOS */
+.frente-head { margin-bottom: 16px; }
+.frente-head h1 {
+  margin: 0 0 4px; font-size: 24px; font-weight: 800; letter-spacing: -.02em;
+}
+.frente-head .lead {
+  margin: 0; max-width: 78ch; font-size: 14px; color: var(--texto-2);
+}
+.eyebrow {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--welli-azul);
+  margin-bottom: 6px;
+}
+
+h2.sec {
+  font-size: 15px; font-weight: 700; margin: 26px 0 4px;
+  letter-spacing: -.01em;
+}
+p.sec-sub { margin: 0 0 12px; font-size: 12.5px; color: var(--texto-3); }
+/* Subtitulo de bloque dentro de una seccion: mas discreto que h2.sec para
+   que no compita con la numeracion de los cinco puntos del frente. */
+h3.sub-sec {
+  font-size: 13.5px; font-weight: 700; margin: 0 0 3px;
+  letter-spacing: -.005em; color: var(--texto-2);
+}
+
+/* --------------------------------------------------------- TARJETAS */
+.kpis {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  align-items: start;
+}
+.kpi {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-left: 3px solid var(--borde-fuerte);
+  border-radius: var(--radio);
+  padding: 13px 15px;
+  box-shadow: var(--sombra);
+  min-width: 0;
+}
+.kpi[data-color="azul"]     { border-left-color: var(--s1); }
+.kpi[data-color="amarillo"] { border-left-color: var(--welli-amarillo); }
+.kpi[data-color="morado"]   { border-left-color: var(--s3); }
+.kpi[data-color="verde"]    { border-left-color: var(--s4); }
+
+.kpi-label {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--texto-3);
+  margin-bottom: 6px;
+}
+.kpi-valor {
+  font-size: 27px; font-weight: 800; letter-spacing: -.03em;
+  line-height: 1.05; font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.kpi-valor.vacio { color: var(--texto-3); font-weight: 600; }
+.kpi-sub { font-size: 11.5px; color: var(--texto-3); margin-top: 3px; }
+
+.delta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; font-weight: 700; margin-top: 7px;
+}
+.delta.sube { color: var(--ok); }
+.delta.baja { color: var(--mal); }
+.delta.plano { color: var(--texto-3); }
+.delta small { font-weight: 500; color: var(--texto-3); }
+
+.foto {
+  display: inline-block; margin-top: 7px;
+  font-size: 10px; font-weight: 700;
+  color: var(--texto-3);
+  border: 1px dashed var(--borde-fuerte);
+  border-radius: 999px; padding: 2px 7px;
+}
+
+/* ----------------------------------------------------------- BADGES */
+.badge {
+  display: inline-flex; align-items: flex-start; gap: 6px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.4;
+  padding: 5px 9px; border-radius: 7px;
+  margin-top: 8px;
+}
+.badge.falta { background: var(--alerta-bg); color: var(--alerta); }
+/* Las notas se recortan a 3 lineas: una nota larga estiraba la tarjeta y
+   descuadraba la altura de toda la fila de KPIs. El texto completo vive en
+   el atributo title. */
+.badge .txt-badge {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Disco con una "i". El fondo se declara por variante en vez de con
+   currentColor, porque el glifo necesita el color opuesto y currentColor
+   resolvería ambos al mismo valor. */
+.badge .ico-i {
+  flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1.5px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 800; font-style: italic; line-height: 1;
+  color: var(--superficie);
+}
+.badge.info  .ico-i { background: #2A4A9E; }
+.badge.falta .ico-i { background: var(--alerta); }
+:root[data-tema="oscuro"] .badge.info  .ico-i { background: #9CB6F5; color: #1B2436; }
+:root[data-tema="oscuro"] .badge.falta .ico-i { background: var(--alerta); color: #332A10; }
+.badge.info  { background: var(--welli-nube); color: #2A4A9E; }
+:root[data-tema="oscuro"] .badge.info { background: #1B2436; color: #9CB6F5; }
+
+.aviso {
+  display: flex; gap: 9px; align-items: flex-start;
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-left: 3px solid var(--welli-amarillo);
+  border-radius: var(--radio);
+  padding: 11px 14px; margin: 12px 0;
+  font-size: 12.5px; color: var(--texto-2); line-height: 1.5;
+}
+.aviso.obra { border-left-color: var(--alerta); background: var(--alerta-bg); color: var(--alerta); }
+.aviso strong { color: inherit; }
+.aviso .ico { font-size: 15px; line-height: 1.2; flex: 0 0 auto; }
+
+
+/* ------------------------------------------ FILTRO GLOBAL DE ORIGEN */
+.campo-origen { position: relative; }
+.sel-origen {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-width: 190px; max-width: 300px;
+  padding: 7px 10px; font: inherit; font-size: 12.5px;
+  background: var(--superficie-2); color: var(--texto);
+  border: 1px solid var(--borde); border-radius: 8px; cursor: pointer;
+  text-align: left;
+}
+.sel-origen:hover { border-color: var(--welli-azul); }
+.sel-origen[aria-expanded="true"] { border-color: var(--welli-azul); }
+.sel-origen #btnOrigenTxt {
+  flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sel-origen .caret { color: var(--texto-3); flex: 0 0 auto; }
+
+.panel-origen {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0;
+  width: 330px; max-height: 60vh; display: flex; flex-direction: column;
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: 10px; box-shadow: 0 12px 32px rgba(16, 20, 32, .18);
+}
+:root[data-tema="oscuro"] .panel-origen { box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
+.po-presets {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 10px; border-bottom: 1px solid var(--borde);
+}
+.po-preset {
+  padding: 4px 9px; font-size: 11.5px; font-weight: 600;
+  background: var(--superficie-2); color: var(--texto-2);
+  border: 1px solid var(--borde); border-radius: 20px; cursor: pointer;
+}
+.po-preset:hover { border-color: var(--welli-azul); color: var(--welli-azul); }
+.po-preset[aria-pressed="true"] {
+  background: var(--welli-azul); border-color: var(--welli-azul); color: #fff;
+}
+.po-lista { overflow-y: auto; padding: 6px 4px; flex: 1 1 auto; }
+.po-grupo {
+  padding: 8px 10px 3px; font-size: 10px; font-weight: 800;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--texto-3);
+}
+.po-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 10px; font-size: 12.5px; border-radius: 6px; cursor: pointer;
+}
+.po-item:hover { background: var(--superficie-2); }
+.po-item input { margin: 0; accent-color: var(--welli-azul); cursor: pointer; }
+.po-item .po-n {
+  margin-left: auto; font-size: 11px; color: var(--texto-3);
+  font-variant-numeric: tabular-nums;
+}
+.po-pie {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 9px 10px; border-top: 1px solid var(--borde);
+}
+.po-mini { padding: 5px 12px; font-size: 12px; }
+
+/* Cinta que recuerda el universo activo dentro de cada frente filtrable */
+.cinta-origen {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin: 0 0 14px; padding: 5px 11px;
+  font-size: 12px; font-weight: 600;
+  background: var(--welli-nube); color: #2A4A9E; border-radius: 20px;
+}
+:root[data-tema="oscuro"] .cinta-origen { background: #1B2440; color: #A8C0FF; }
+.cinta-origen b { font-weight: 800; }
+/* La nota del recorte de deshabilitadas: presente pero subordinada al conteo
+   principal, que es el dato que se lee primero. */
+.cinta-nota { opacity: .72; font-weight: 600; }
+
+
+/* Segundo dato dentro de una tarjeta KPI: el total arriba y el desglose
+   destacado abajo. Se usa en "sedes nuevas": total del negocio y cuantas
+   trajo marketing. */
+.kpi-parte {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed var(--borde-fuerte);
+}
+.kpi-parte .n {
+  font-size: 26px; font-weight: 800; letter-spacing: -.02em;
+  color: var(--welli-azul); font-variant-numeric: tabular-nums;
+}
+.kpi-parte .pc {
+  font-size: 14px; font-weight: 700; color: var(--welli-azul);
+  background: var(--welli-nube); padding: 2px 8px; border-radius: 20px;
+}
+:root[data-tema="oscuro"] .kpi-parte .pc { background: #1B2440; }
+.kpi-parte .l { font-size: 11.5px; color: var(--texto-3); line-height: 1.3; }
+
+/* Botones de granularidad dentro del encabezado de un panel */
+.panel-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+.gran-sel { display: flex; gap: 4px; flex: 0 0 auto; }
+.gran-sel button {
+  font: inherit; font-size: 11.5px; font-weight: 600;
+  padding: 4px 10px; cursor: pointer;
+  background: var(--superficie-2); color: var(--texto-2);
+  border: 1px solid var(--borde); border-radius: 20px;
+}
+.gran-sel button:hover { border-color: var(--welli-azul); color: var(--welli-azul); }
+.gran-sel button[aria-pressed="true"] {
+  background: var(--welli-azul); border-color: var(--welli-azul); color: #fff;
+}
+
+/* Lectura del gráfico: la frase que dice qué hay que concluir. Es lo
+   contrario de .aviso — el aviso advierte sobre el dato, esta afirma
+   sobre el negocio. Va debajo del gráfico que la sustenta. */
+.lectura {
+  margin: 12px 0 0; padding: 11px 14px 11px 15px;
+  border-left: 3px solid var(--welli-azul);
+  background: var(--superficie);
+  border-radius: 0 8px 8px 0;
+  max-width: 92ch;
+  font-size: 14px; line-height: 1.55; color: var(--texto);
+}
+.lectura b, .lectura strong { font-weight: 800; }
+.lectura.alerta { border-left-color: var(--alerta); }
+
+/* --------------------------------------------------------- PANELES */
+.grid2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.grid3 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+.panel {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  padding: 15px 16px;
+  box-shadow: var(--sombra);
+  min-width: 0;
+}
+.panel h3 { margin: 0 0 2px; font-size: 14px; font-weight: 700; }
+.panel .sub { margin: 0 0 12px; font-size: 11.5px; color: var(--texto-3); }
+
+.leyenda { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.leyenda span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--texto-2); }
+.leyenda i { width: 10px; height: 10px; border-radius: 3px; display: block; }
+
+.grafica { position: relative; width: 100%; }
+.grafica svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.tooltip {
+  position: absolute; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -100%);
+  background: var(--texto); color: var(--fondo);
+  font-size: 11.5px; line-height: 1.45; font-weight: 600;
+  padding: 7px 9px; border-radius: 7px;
+  white-space: nowrap; z-index: 20;
+  transition: opacity .1s;
+}
+:root[data-tema="oscuro"] .tooltip { background: #F2F2EF; color: #101114; }
+.tooltip b { font-weight: 800; }
+.tooltip .fila { display: flex; align-items: center; gap: 6px; }
+.tooltip .pt { width: 8px; height: 8px; border-radius: 2px; }
+
+.vacio-graf {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 150px; text-align: center;
+  border: 1px dashed var(--borde-fuerte); border-radius: 9px;
+  color: var(--texto-3); font-size: 12.5px; padding: 18px;
+}
+
+/* ------------------------------------------------- MAPA DE CALOR
+   Una sola tonalidad por tabla, clara a oscura, 5 pasos. Nunca un
+   arcoiris: la escala es de magnitud, no de categoria. Los pasos se
+   calcularon mezclando el color de serie con la superficie y se
+   validaron: el texto conserva 5.2:1 de contraste en el paso mas
+   fuerte, asi que no hay que cambiarle el color a la letra.
+   La intensidad es RELATIVA AL TAMANO DE LA COSECHA, no al valor
+   absoluto — si no, la cosecha de 1.922 sedes tine todo y las demas
+   se ven vacias. */
+td.hm { font-variant-numeric: tabular-nums; }
+
+.hm-acum-0  { background: #FFFFFF; }
+.hm-acum-1  { background: #E6EBFA; }
+.hm-acum-2  { background: #C9D3F4; }
+.hm-acum-3  { background: #A8B9ED; }
+.hm-acum-4  { background: #839BE6; }
+
+.hm-viva-0  { background: #FFFFFF; }
+.hm-viva-1  { background: #E2F0EA; }
+.hm-viva-2  { background: #C0DFD1; }
+.hm-viva-3  { background: #9ACCB5; }
+.hm-viva-4  { background: #6FB795; }
+
+/* Riesgo (inactivas) y muerte: dos rampas secuenciales de un solo tono,
+   claro a oscuro, separadas del azul del acumulado. La progresion ambar ->
+   rojo lee el mismo eje del negocio (se enfria -> se pierde) sin usar el
+   verde ni el azul, que ya significan otra cosa en el tablero. */
+.hm-riesgo-0 { background: #FFFFFF; }
+.hm-riesgo-1 { background: #FBE9D4; }
+.hm-riesgo-2 { background: #F6D3A8; }
+.hm-riesgo-3 { background: #EFB975; }
+.hm-riesgo-4 { background: #E39D42; }
+
+.hm-muerte-0 { background: #FFFFFF; }
+.hm-muerte-1 { background: #FADEDA; }
+.hm-muerte-2 { background: #F3BDB5; }
+.hm-muerte-3 { background: #E8968B; }
+.hm-muerte-4 { background: #D96D5E; }
+
+.hm-plata-0 { background: #FFFFFF; }
+.hm-plata-1 { background: #F6EFDE; }
+.hm-plata-2 { background: #EBDDB8; }
+.hm-plata-3 { background: #DFC88C; }
+.hm-plata-4 { background: #D2B05C; }
+
+:root[data-tema="oscuro"] .hm-acum-0  { background: #17181C; }
+:root[data-tema="oscuro"] .hm-acum-1  { background: #202638; }
+:root[data-tema="oscuro"] .hm-acum-2  { background: #2A3657; }
+:root[data-tema="oscuro"] .hm-acum-3  { background: #36487B; }
+:root[data-tema="oscuro"] .hm-acum-4  { background: #435CA4; }
+
+:root[data-tema="oscuro"] .hm-viva-0  { background: #17181C; }
+:root[data-tema="oscuro"] .hm-viva-1  { background: #182A26; }
+:root[data-tema="oscuro"] .hm-viva-2  { background: #1A3F32; }
+:root[data-tema="oscuro"] .hm-viva-3  { background: #1C5740; }
+:root[data-tema="oscuro"] .hm-viva-4  { background: #1E724F; }
+
+:root[data-tema="oscuro"] .hm-riesgo-0 { background: #17181C; }
+:root[data-tema="oscuro"] .hm-riesgo-1 { background: #2E2415; }
+:root[data-tema="oscuro"] .hm-riesgo-2 { background: #48350F; }
+:root[data-tema="oscuro"] .hm-riesgo-3 { background: #64470B; }
+:root[data-tema="oscuro"] .hm-riesgo-4 { background: #855C07; }
+
+:root[data-tema="oscuro"] .hm-muerte-0 { background: #17181C; }
+:root[data-tema="oscuro"] .hm-muerte-1 { background: #331C1A; }
+:root[data-tema="oscuro"] .hm-muerte-2 { background: #4E2620; }
+:root[data-tema="oscuro"] .hm-muerte-3 { background: #6E3128; }
+:root[data-tema="oscuro"] .hm-muerte-4 { background: #913C30; }
+
+:root[data-tema="oscuro"] .hm-plata-0 { background: #17181C; }
+:root[data-tema="oscuro"] .hm-plata-1 { background: #2C2618; }
+:root[data-tema="oscuro"] .hm-plata-2 { background: #443614; }
+:root[data-tema="oscuro"] .hm-plata-3 { background: #5F490F; }
+:root[data-tema="oscuro"] .hm-plata-4 { background: #7E5D0A; }
+
+/* el hover de fila no debe tapar el calor */
+table.t tbody tr:hover td.hm { filter: brightness(.97); }
+:root[data-tema="oscuro"] table.t tbody tr:hover td.hm { filter: brightness(1.15); }
+
+/* leyenda de la escala */
+.hm-leyenda {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 10px; font-size: 10.5px; color: var(--texto-3);
+}
+.hm-leyenda .pasos { display: flex; }
+.hm-leyenda .pasos i {
+  width: 26px; height: 11px; display: block;
+  border: 1px solid var(--borde);
+  border-left-width: 0;
+}
+.hm-leyenda .pasos i:first-child { border-left-width: 1px; }
+
+/* ---------------------------------------------------------- TABLAS */
+.tabla-wrap { overflow-x: auto; margin-top: 4px; }
+table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.t th, table.t td {
+  padding: 8px 10px; text-align: right;
+  border-bottom: 1px solid var(--borde);
+  white-space: nowrap;
+}
+table.t th {
+  font-size: 10px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--texto-3);
+  text-align: right; position: sticky; top: 0;
+  background: var(--superficie);
+}
+table.t th:first-child, table.t td:first-child { text-align: left; }
+table.t td { font-variant-numeric: tabular-nums; }
+table.t tbody tr:hover { background: var(--superficie-2); }
+table.t td.txt { text-align: left; white-space: normal; min-width: 160px; }
+.cel-vacia { color: var(--texto-3); }
+
+/* Dona y desglose en el mismo panel, APILADOS y no al lado: la dona se
+   dibuja en un viewBox fijo, asi que meterla en media columna la escala
+   hasta que su leyenda deja de leerse. Apilada usa todo el ancho del panel
+   y la tabla queda debajo, donde igual se lee de corrido. */
+.torta-fila { display: flex; flex-direction: column; gap: 10px; }
+.torta-tabla table { font-size: 12.5px; }
+.torta-tabla th { padding-bottom: 6px; }
+.torta-tabla td { padding: 6px 12px; }
+
+/* El % dentro de la celda del mapa de calor: va debajo del valor y en
+   secundario, porque el numero manda y el % lo explica. */
+.cel-pct {
+  display: block; font-size: 10.5px; font-weight: 500;
+  color: var(--texto-3); margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+td.hm .cel-pct { color: var(--texto-2); }
+
+/* Barra de cumplimiento DENTRO de una celda de tabla (tabla(), f:'pctBar').
+   Mismos tokens y umbrales que claseCumplimiento_/.meta-grande-fill — no es
+   un color nuevo, es la misma semántica de estado en un formato angosto
+   para filas de tabla en vez de una tarjeta grande. */
+.tabla-pct-cifra { font-weight: 700; font-variant-numeric: tabular-nums; }
+.tabla-pct-cifra.ok    { color: var(--ok); }
+.tabla-pct-cifra.media { color: var(--alerta); }
+.tabla-pct-cifra.mal   { color: var(--mal); }
+.tabla-pct-pista { background: var(--superficie-2); border-radius: 4px;
+  height: 6px; margin-top: 4px; min-width: 70px; overflow: hidden; }
+.tabla-pct-fill { height: 100%; border-radius: 4px; }
+.tabla-pct-fill.ok    { background: var(--ok); }
+.tabla-pct-fill.media { background: var(--alerta); }
+.tabla-pct-fill.mal   { background: var(--mal); }
+
+.pill {
+  display: inline-block; font-size: 10px; font-weight: 800;
+  padding: 2px 7px; border-radius: 999px;
+}
+.pill.a   { background: var(--welli-nube); color: #2A4A9E; }
+.pill.aa  { background: var(--welli-crema); color: #7A5C00; }
+.pill.aaa { background: var(--welli-amarillo); color: var(--welli-tinta); }
+.pill.ok  { background: var(--ok-bg); color: var(--ok); }
+.pill.warn{ background: var(--alerta-bg); color: var(--alerta); }
+.pill.bad { background: var(--mal-bg); color: var(--mal); }
+:root[data-tema="oscuro"] .pill.a { background: #1B2436; color: #9CB6F5; }
+:root[data-tema="oscuro"] .pill.aa { background: #332A10; color: #E8C766; }
+
+/* ------------------------------------------------------ CUALITATIVO */
+.cuali { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.cuali .caja {
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-top: 3px solid var(--borde-fuerte);
+  border-radius: var(--radio); padding: 13px 15px;
+}
+.cuali .caja.bien { border-top-color: var(--ok); }
+.cuali .caja.cuello { border-top-color: var(--alerta); }
+.cuali .caja.ojo { border-top-color: var(--welli-azul); }
+.cuali h4 {
+  margin: 0 0 6px; font-size: 12px; font-weight: 800;
+  display: flex; align-items: center; gap: 6px;
+}
+.cuali p { margin: 0; font-size: 13px; color: var(--texto-2); line-height: 1.55; }
+.cuali .fuente-txt { margin-top: 8px; font-size: 10.5px; color: var(--texto-3); }
+
+/* ------------------------------------------------------ PENDIENTES */
+.pend-lista { display: grid; gap: 10px; }
+.pend {
+  display: grid; gap: 3px;
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-left: 3px solid var(--alerta);
+  border-radius: var(--radio); padding: 12px 14px;
+}
+.pend .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pend .fr { font-size: 10px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--texto-3); }
+.pend .qu { font-size: 13.5px; font-weight: 700; }
+.pend .de { font-size: 12px; color: var(--texto-2); line-height: 1.5; }
+
+/* ------------------------------------------------------- ESCALERA */
+.flujo { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+.flujo .paso {
+  flex: 1 1 130px; min-width: 120px;
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: 10px; padding: 11px 12px; position: relative;
+}
+.flujo .paso .n { font-size: 21px; font-weight: 800; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; }
+.flujo .paso .l { font-size: 11px; color: var(--texto-3); margin-top: 2px; line-height: 1.35; }
+.flujo .flecha { align-self: center; color: var(--texto-3); font-size: 15px; }
+
+/* -------------------------------------------------------- ESTADOS */
+.cargando {
+  display: flex; align-items: center; gap: 10px;
+  padding: 40px 20px; color: var(--texto-3); font-size: 13.5px;
+}
+.spin {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid var(--borde-fuerte); border-top-color: var(--welli-azul);
+  animation: gira .7s linear infinite;
+}
+@keyframes gira { to { transform: rotate(360deg); } }
+
+.error-caja {
+  background: var(--mal-bg); color: var(--mal);
+  border-radius: var(--radio); padding: 14px 16px;
+  font-size: 13px; line-height: 1.55;
+}
+
+.oculto { display: none !important; }
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+.pie {
+  margin-top: 34px; padding-top: 14px;
+  border-top: 1px solid var(--borde);
+  font-size: 11px; color: var(--texto-3); line-height: 1.6;
+}
+
+/* -------------------------------------------------------- RESPONSIVE */
+@media (max-width: 900px) {
+  :root { --header-h: auto; }
+  .cuerpo { flex-direction: column; }
+  .sidebar {
+    position: static; width: 100%; flex: 1 1 auto;
+    max-height: none; padding: 10px;
+    display: flex; gap: 6px; overflow-x: auto;
+    border-bottom: 1px solid var(--borde);
+  }
+  .nav-titulo { display: none; }
+  .nav-item { width: auto; white-space: nowrap; margin: 0; }
+  .nav-item[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--welli-amarillo); }
+  .contenido { padding: 14px; }
+  .kpi-valor { font-size: 23px; }
+  .frente-head h1 { font-size: 20px; }
+}
+
+@media print {
+  .sidebar, .filtros, .presets, .btn { display: none !important; }
+  .panel, .kpi { break-inside: avoid; box-shadow: none; }
+}
+/* ------------------------------------------------- LONG TAIL (F7) */
+/* Chips de impacto agrupados por workflow. El color del punto lo pone la
+   variable --c que inyecta el JS, asi que la paleta vive en un solo lugar. */
+.imp-chips { margin: 2px 0 8px; }
+.imp-barra { display: flex; gap: 6px; margin-bottom: 6px; }
+.imp-grupo {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  padding: 5px 0; border-top: 1px solid var(--borde);
+}
+.imp-chip, .imp-todo, .imp-wf {
+  font: inherit; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--borde); background: var(--superficie);
+  color: var(--texto-3); border-radius: 999px; padding: 4px 9px;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.imp-todo { font-weight: 700; color: var(--texto-2); }
+.imp-wf {
+  font-weight: 700; color: var(--texto); border-color: transparent;
+  background: transparent; padding-left: 2px; min-width: 168px;
+}
+.imp-wf i { background: var(--c); width: 10px; height: 10px; }
+.imp-wf small { color: var(--texto-3); font-weight: 400; }
+.imp-chip.on { border-color: var(--c); color: var(--texto); font-weight: 600; }
+.imp-chip:hover, .imp-todo:hover, .imp-wf:hover { border-color: var(--borde-fuerte); }
+.imp-chip small { color: var(--texto-3); font-weight: 400; }
+.imp-chip i, .imp-wf i, .cad-paso i {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none;
+  background: var(--c);
+}
+/* El canal, como en la grafica: WhatsApp relleno, email con el centro hueco.
+   Asi el canal no depende del color, que ya esta gastado en el workflow. */
+.imp-chip i.mail { background: transparent; border: 2px solid var(--c); }
+.imp-chip:not(.on) { opacity: .5; }
+.cad-paso i.wa { background: var(--s3); }
+.cad-paso i.mail { background: var(--s2); }
+
+/* La cadencia como secuencia: los pasos van en fila con flechas, que es lo
+   que la hace legible de un golpe. Se envuelve en pantallas angostas. */
+.cadencia { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0; }
+.cad-paso {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--borde); border-radius: 8px;
+  padding: 5px 9px; font-size: 11.5px; color: var(--texto-2);
+  white-space: nowrap;
+}
+.cad-paso b { color: var(--texto); font-weight: 700; }
+.cad-flecha { color: var(--texto-3); font-size: 12px; }
+
+/* Detalle pieza-por-pieza como tarjetas (14-sep-2026, reemplaza la tabla
+   plana): una tarjeta por pieza, con el texto real de HubSpot arriba (o
+   la etiqueta si la pieza no alcanzo volumen para tener texto) y las
+   metricas clave abajo, en el mismo formato compacto que un KPI. */
+.pieza-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.pieza-card {
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: var(--radio); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.pieza-cab { display: flex; align-items: center; gap: 7px; }
+.pieza-cab i {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--s3);
+}
+.pieza-cab i.mail { background: transparent; border: 2px solid var(--s2); }
+.pieza-cab b { font-size: 12.5px; font-weight: 700; flex: 1 1 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pieza-dia { font-size: 10.5px; color: var(--texto-3); white-space: nowrap; }
+.pieza-texto {
+  margin: 0; font-size: 12.5px; color: var(--texto-2); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; min-height: 2.9em;
+}
+.pieza-texto.pieza-sin-texto { font-style: italic; color: var(--texto-3); }
+.pieza-vacio {
+  margin: 0; font-size: 11.5px; color: var(--texto-3); font-style: italic;
+}
+.pieza-metricas {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  padding-top: 8px; border-top: 1px dashed var(--borde-fuerte);
+}
+.pieza-metricas div { text-align: center; }
+.pieza-metricas b {
+  display: block; font-size: 14px; font-weight: 800;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+.pieza-metricas span { display: block; font-size: 9.5px; color: var(--texto-3);
+  text-transform: uppercase; letter-spacing: .04em; margin-top: 1px; }
+
+/* --------------------------------------------- ACCION Y RESULTADO (F4) */
+/* Fila de encabezado de bloque dentro de una tabla: separa "lo que hicimos"
+   de "lo que logramos" sin partir la tabla en dos, que es lo que permite
+   leerlas como una sola cadena. */
+tr.fila-bloque td {
+  font-size: 10px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--texto-3);
+  background: var(--fondo); text-align: left; padding-top: 12px;
+}
+.delta-cel { font-weight: 700; font-variant-numeric: tabular-nums; }
+.delta-cel.sube { color: var(--ok); }
+.delta-cel.baja { color: var(--mal); }
+.delta-cel.plano { color: var(--texto-3); }
+
+/* Los tres selectores de owner van juntos en la barra de filtros, y se
+   envuelven en pantallas angostas en vez de empujar al de origen. */
+.owner-wrap { display: flex; flex-wrap: wrap; gap: 12px; }
+.owner-wrap select { max-width: 190px; }
+
+/* ------------------------------------- COMPARADOR DE COHORTES (F2) */
+/* Va dentro del frente y no en la barra de filtros: no cambia el universo,
+   solo agrega un segundo grupo a las seis tablas. */
+.cmp-barra {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 10px 0 4px; padding: 8px 10px;
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: 10px;
+}
+.cmp-tit {
+  font-size: 10px; font-weight: 800; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--texto-3); margin-right: 4px;
+}
+.cmp-chip {
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  border: 1px solid var(--borde); background: var(--fondo);
+  color: var(--texto-2); border-radius: 999px; padding: 4px 10px;
+}
+.cmp-chip.on {
+  border-color: var(--s1); color: var(--texto); font-weight: 700;
+  background: var(--superficie);
+}
+.cmp-chip:hover { border-color: var(--borde-fuerte); }
+.cmp-chip small { color: var(--texto-3); font-weight: 400; margin-left: 3px; }
+.cmp-leyenda {
+  margin-left: auto; display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--texto-3);
+}
+.cmp-leyenda i {
+  width: 9px; height: 9px; border-radius: 2px; display: inline-block;
+  margin-left: 8px;
+}
+.cmp-leyenda i.a { background: var(--s1); }
+.cmp-leyenda i.b { background: var(--s2); }
+
+/* La franja de grupo a la izquierda de la fila: dice a que grupo pertenece
+   sin depender de leer la columna de texto. */
+tr.cmp-a td:first-child { box-shadow: inset 3px 0 0 var(--s1); }
+tr.cmp-b td:first-child { box-shadow: inset 3px 0 0 var(--s2); }
+td.cel-grupo { font-size: 11px; color: var(--texto-3); white-space: nowrap; }
+
+/* El promedio se separa del cuerpo de la tabla: es una fila derivada, no una
+   cosecha mas. */
+tr.fila-prom td {
+  border-top: 2px solid var(--borde-fuerte);
+  font-weight: 700; background: var(--fondo);
+}
+tr.fila-prom td:first-child { color: var(--texto-2); }
+
+/* ---- Desenlace de los casos trabajados ------------------------------- */
+.desenl { display: grid; gap: 1px; background: var(--borde);
+  border: 1px solid var(--borde); border-radius: 8px; overflow: hidden;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.des-cel { background: var(--superficie); padding: 11px 13px 12px;
+  box-shadow: inset 3px 0 0 var(--borde); }
+.des-n { display: block; font-size: 22px; font-weight: 800;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.des-e { display: block; font-size: 11.5px; color: var(--texto-2);
+  margin-top: 2px; line-height: 1.35; }
+.des-ok { box-shadow: inset 3px 0 0 var(--ok); }
+.des-ok .des-n { color: var(--ok); }
+.des-vivo { box-shadow: inset 3px 0 0 var(--s1); }
+.des-mal { box-shadow: inset 3px 0 0 var(--mal); }
+.des-mal .des-n { color: var(--mal); }
+
+/* ---- Aviso de foto sin fuente viva -----------------------------------
+   Amarillo y no rojo: el dato no esta mal, esta congelado. Rojo lo haria
+   leer como error de calculo. */
+.aviso-foto { background: #FFF6D6; border: 1px solid #F0D98A;
+  border-left: 4px solid #FFCE00; border-radius: 8px;
+  padding: 11px 14px; font-size: 13px; color: #6B5613; line-height: 1.55;
+  margin-top: 10px; }
+:root[data-tema="oscuro"] .aviso-foto { background: #2C2510;
+  border-color: #4A3D14; color: #E8D9A6; }
+
+/* ---- Cumplimiento de metas, SOLO la semana en curso (F4) -------------
+   Dos metas grandes, cada una con una barra de progreso propia: cuanto
+   pedia y cuanto lleva. Nada de una fila por semana — eso ya es la grafica
+   de la seccion 2. Tres niveles de color, los mismos tokens de estado que
+   el resto del tablero (nunca la paleta categorica s1-s4, que es identidad,
+   no estado). */
+.metas-actual { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;
+  margin-top: 4px; }
+@media (max-width: 980px) { .metas-actual { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 620px) { .metas-actual { grid-template-columns: 1fr; } }
+.meta-grande { border: 1px solid var(--borde); border-radius: 10px;
+  padding: 14px 16px; }
+.meta-grande-cab { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.meta-grande-cab b { font-size: 13.5px; font-weight: 700; color: var(--texto); }
+.meta-grande-cab span { font-size: 11px; color: var(--texto-3); text-align: right; }
+.meta-grande-cifra { font-size: 26px; font-weight: 800; color: var(--texto);
+  font-variant-numeric: tabular-nums; line-height: 1.2; }
+.meta-grande-cifra span { font-size: 13px; font-weight: 600;
+  color: var(--texto-3); }
+.meta-grande-pista { background: var(--superficie-2); border-radius: 6px;
+  height: 18px; overflow: hidden; margin-top: 8px; }
+.meta-grande-fill { height: 100%; border-radius: 6px; }
+.meta-grande-fill.ok { background: var(--ok); }
+.meta-grande-fill.media { background: var(--alerta); }
+.meta-grande-fill.mal { background: var(--mal); }
+.meta-grande-pct { margin-top: 6px; font-size: 13px; font-weight: 700; }
+.meta-grande-pct.ok { color: var(--ok); }
+.meta-grande-pct.media { color: var(--alerta); }
+.meta-grande-pct.mal { color: var(--mal); }
+.metas-supero { font-size: 10.5px; font-weight: 700; }
+
+/* ---- Linea de tiempo de la gestion (F4, metas) -----------------------
+   Los controles son locales a la grafica: no disparan una recarga del
+   tablero ni dependen del selector de fecha global. */
+.tl-cab { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  justify-content: space-between; margin-bottom: 4px; }
+.tl-grupo { display: flex; gap: 2px; background: var(--superficie-2);
+  border-radius: 7px; padding: 2px; }
+.tl-btn { border: none; background: transparent; color: var(--texto-2);
+  font-size: 11.5px; font-weight: 600; padding: 5px 11px; border-radius: 5px;
+  cursor: pointer; }
+.tl-btn:hover { color: var(--texto); }
+.tl-btn.activo { background: var(--superficie); color: var(--texto);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.tl-mini { opacity: .92; }
+/* Un boton de rango que hoy muestra lo mismo que "todo" (no hay tanto
+   historial) se atenua en vez de parecer que no responde al clic. */
+.tl-btn-igual { opacity: .5; }
+.tl-btn-igual.activo { opacity: .85; }
+.tl-hist { font-size: 10.5px; color: var(--texto-3); margin-left: 8px;
+  align-self: center; white-space: nowrap; }
+
+/* ---- Limites del dato -----------------------------------------------
+   Van al lado de los numeros, no en un pie de pagina: cada uno cambia
+   como se lee una cifra de arriba. */
+.limites { margin-top: 14px; border: 1px solid var(--borde);
+  border-left: 4px solid var(--texto-3); border-radius: 8px;
+  background: var(--superficie); padding: 12px 16px 13px; }
+.limites-tit { font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--texto-3); margin-bottom: 7px; }
+.limites ul { margin: 0; padding-left: 18px; }
+.limites li { font-size: 12.5px; color: var(--texto-2); line-height: 1.6;
+  margin-bottom: 5px; }
+.limites li:last-child { margin-bottom: 0; }
+
+
+/* ---- Atribucion por WhatsApp -----------------------------------------
+   La fila que gana va marcada: la comparacion es el dato, no el numero
+   suelto, y con dos filas iguales el lector tiene que hacer la resta. */
+tr.wa-si td { background: var(--ok-bg); }
+tr.wa-si td:first-child { box-shadow: inset 3px 0 0 var(--ok); font-weight: 600; }
+tr.wa-no td:first-child { box-shadow: inset 3px 0 0 var(--borde-fuerte); }
+
+/* ---- La era nueva en la tabla historica -------------------------------
+   Se marca porque NO es la misma operacion: mismo indicador, otro regimen. */
+tr.era-nueva td { background: var(--ok-bg); }
+tr.era-nueva td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+.tag-era { display: inline-block; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px;
+  border-radius: 3px; background: var(--ok); color: #fff; vertical-align: 1px;
+  margin-left: 5px; }
+
+/* ---- La bolsa: lo aprobado sin firmar, partido por vida del credito ---
+   Una sola barra apilada con dos segmentos, no dos barras: la pregunta es
+   qué PROPORCIÓN de la bolsa todavía existe, y eso se lee de un solo
+   trazo. El separador de 2px es superficie, no un borde: así los dos
+   segmentos no se tocan y ninguno parece más largo de lo que es. */
+.bolsa { margin-top: 4px; }
+.bolsa-pista { display: flex; height: 30px; border-radius: 6px;
+  overflow: hidden; background: var(--superficie-2); gap: 2px; }
+.bolsa-seg { min-width: 2px; position: relative; }
+.bolsa-vivo { background: var(--s2); }
+.bolsa-muerto { background: var(--borde-fuerte); }
+.bolsa-pie { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 9px; }
+.bolsa-pie div { font-size: 12px; color: var(--texto-2); line-height: 1.45; }
+.bolsa-pie b { display: block; font-size: 16px; font-weight: 800;
+  color: var(--texto); font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em; }
+.bolsa-pie i { font-style: normal; display: inline-block; width: 9px;
+  height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.bolsa-pie .i-vivo { background: var(--s2); }
+.bolsa-pie .i-muerto { background: var(--borde-fuerte); }
+/* Pagado/pendiente usa color de ESTADO (ok/alerta), no la paleta
+   categorica: aca "pagado" es un resultado bueno y "pendiente" pide
+   atencion, y esa es la distincion que el color tiene que cargar. */
+.bolsa-seg.bolsa-pagado { background: var(--ok); }
+.bolsa-seg.bolsa-pend { background: var(--alerta); }
+.bolsa-pie .i-pagado { background: var(--ok); }
+.bolsa-pie .i-pend { background: var(--alerta); }
+
+/* ---- Embudo de casos, compacto (Welli Points) -------------------------
+   Version sin plata del embudo de rescate: tres barras horizontales, el
+   ancho es proporcional a la primera fila (el 100% del programa). */
+.embw { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.embw-fila { display: grid; grid-template-columns: 120px 1fr 78px;
+  gap: 10px; align-items: center; }
+.embw-etq { font-size: 12px; color: var(--texto-2); }
+.embw-pista { background: var(--superficie-2); border-radius: 5px;
+  height: 16px; overflow: hidden; }
+.embw-barra { height: 100%; border-radius: 5px; background: var(--s1); }
+.embw-fila.ultimo .embw-barra { background: var(--s3); }
+.embw-num { text-align: right; font-variant-numeric: tabular-nums; }
+.embw-num b { font-size: 14px; font-weight: 800; }
+.embw-num span { display: block; font-size: 10.5px; color: var(--texto-3); }
+
+/* ---- Cobertura: casos contra plata, sobre la misma escala -------------
+   Dos barras sobre una pista de 100% cada una. Mismo eje, misma longitud
+   de referencia: la comparación es la lectura, y con dos escalas distintas
+   no se podría hacer. */
+.cober { display: flex; flex-direction: column; gap: 13px; margin-top: 2px; }
+.cober-fila { display: grid; grid-template-columns: 88px 1fr auto;
+  gap: 12px; align-items: center; }
+.cober-etq { font-size: 12px; color: var(--texto-2); line-height: 1.3; }
+.cober-pista { background: var(--superficie-2); border: 1px solid var(--borde);
+  border-radius: 5px; height: 22px; overflow: hidden; }
+.cober-barra { height: 100%; background: var(--s1); border-radius: 4px 0 0 4px; }
+.cober-fila.es-plata .cober-barra { background: var(--s2); }
+.cober-num { font-size: 17px; font-weight: 800; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
+.cober-det { font-size: 11.5px; color: var(--texto-3); display: block;
+  font-weight: 500; letter-spacing: 0; }
+
+/* ---- La cosecha legible ----------------------------------------------
+   Solo una semana tiene sus casos casi todos resueltos, y es la única cuyo
+   cierre se puede leer. Marcarla no es decoración: sin la marca el lector
+   compara cinco tasas de las que cuatro todavía se mueven. */
+tr.coh-legible td { background: var(--ok-bg); }
+tr.coh-legible td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+tr.coh-verde td { color: var(--texto-3); }
+tr.coh-verde td b { font-weight: 600; }
+.coh-tag { display: inline-block; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px;
+  border-radius: 3px; background: var(--ok); color: #fff; vertical-align: 1px;
+  margin-left: 5px; }
+.coh-tag.tibia { background: var(--borde-fuerte); color: var(--texto-2); }
+
+/* ---- Tarjeta de ventana ----------------------------------------------
+   Reemplaza la tabla "cada ventana cierra distinto", que decía lo mismo
+   que estas tarjetas una fila más arriba. Ahora la tarjeta carga los
+   números Y el comportamiento declarado: una sola pieza por ventana. */
+.vent-card { border-top: 3px solid var(--borde); display: flex;
+  flex-direction: column; }
+.vent-peso { font-size: 11px; color: var(--texto-3); margin: 0 0 8px;
+  font-variant-numeric: tabular-nums; }
+.vent-cifras { display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+  background: var(--borde); border-radius: 8px; overflow: hidden;
+  /* auto arriba: las tres tarjetas tienen textos de distinto largo y sin
+     esto las cifras quedan a tres alturas distintas, que es justo lo que
+     hace que dejen de compararse de un barrido. */
+  margin-top: auto; padding-top: 0; }
+.vent-card > p:last-of-type { margin-bottom: 10px; }
+.vent-cifras div { background: var(--superficie-2); padding: 8px 10px 9px; }
+.vent-cifras b { display: block; font-size: 17px; font-weight: 800;
+  letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.vent-cifras span { display: block; font-size: 10.5px; color: var(--texto-3);
+  margin-top: 1px; line-height: 1.3; }
+.vent-cifras .destaca b { color: var(--s2); }
+
+/* ---- Embudo en casos y en plata --------------------------------------
+   Dos mitades sobre la misma fila, cada una con su propia pista de 100%.
+   No es un eje doble: son dos magnitudes distintas, cada una normalizada
+   contra su propio total, y lo que se compara es la FORMA de las dos
+   caidas — que la plata caiga menos que los casos es el hallazgo. */
+.emb2 { display: flex; flex-direction: column; gap: 5px; }
+.emb2-cab { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 14px;
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--texto-3); padding-bottom: 3px;
+  border-bottom: 1px solid var(--borde); margin-bottom: 3px; }
+.emb2-cab > div + div { padding-left: 2px; }
+.emb2-fila { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 14px;
+  align-items: center; padding: 3px 0; }
+.emb2-etq { font-size: 12.5px; color: var(--texto-2); line-height: 1.3; }
+.emb2-etq b { font-weight: 600; color: var(--texto); }
+.emb2-etq span { display: block; font-size: 11px; color: var(--texto-3); }
+.emb2-mitad { display: grid; grid-template-columns: 1fr 92px; gap: 9px;
+  align-items: center; }
+.emb2-pista { background: var(--superficie-2); border-radius: 4px;
+  height: 15px; overflow: hidden; }
+.emb2-barra { height: 100%; border-radius: 4px; }
+.emb2-barra.c { background: var(--s1); }
+.emb2-barra.m { background: var(--s2); }
+.emb2-num { text-align: right; font-variant-numeric: tabular-nums;
+  line-height: 1.15; }
+.emb2-num b { font-size: 13px; font-weight: 700; }
+.emb2-num span { display: block; font-size: 10.5px; color: var(--texto-3); }
+
+/* Los tres numeros que se citan van con mas peso: la bolsa, la lista y la
+   firma. Sin esa jerarquia las siete filas se leen como siete iguales. */
+.emb2-fila.es-hito .emb2-etq b { font-weight: 800; }
+.emb2-fila.es-hito .emb2-num b { font-size: 14.5px; font-weight: 800; }
+.emb2-fila.es-hito .emb2-pista { height: 19px; }
+/* La fuga no avanza el embudo: es la salida, y va en el color de alerta. */
+.emb2-fila.es-fuga .emb2-barra { background: var(--mal); }
+.emb2-fila.es-fuga .emb2-etq b { color: var(--mal); font-weight: 600; }
+/* El paso cruzado no sale del registro de la llamada, asi que no es un
+   subconjunto del de arriba: se separa con un borde para que no se lea
+   como continuacion de la cadena. */
+.emb2-fila.es-cruzado { border-top: 1px dashed var(--borde-fuerte);
+  margin-top: 5px; padding-top: 8px; }
+.emb2-fila.es-cruzado .emb2-barra.c { background: var(--ok); }
+.emb2-fila.es-cruzado .emb2-barra.m { background: var(--ok); }
+.emb2-fila.es-cruzado .emb2-num b { color: var(--ok); }
+/* El salto de la bolsa a la lista ES la cobertura: se rotula en el hueco
+   entre las dos filas, que es donde ocurre. */
+.emb2-salto { font-size: 12px; color: var(--texto-2); line-height: 1.5;
+  background: var(--superficie-2); border-left: 3px solid var(--s2);
+  border-radius: 0 6px 6px 0; padding: 7px 12px; margin: 2px 0 4px; }
+
+/* ---- Calendario de la gestion ---------------------------------------
+   Lunes a viernes: en toda la operacion no hay un solo sabado ni domingo,
+   y dos columnas vacias solo dirian que el equipo no trabaja fines de
+   semana, que ya se sabe.
+
+   Una sola rampa de tono para la cobertura, claro a oscuro. Es una
+   magnitud, no una identidad ni una polaridad: ni categorico ni divergente
+   corresponden aca. */
+.cal { display: flex; flex-direction: column; gap: 4px; overflow-x: auto; }
+.cal-fila { display: grid; grid-template-columns: 52px repeat(5, 1fr);
+  gap: 4px; min-width: 640px; }
+.cal-cab { align-items: end; }
+.cal-dow { font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--texto-3); padding: 0 0 3px 2px; }
+.cal-sem { font-size: 10.5px; color: var(--texto-3); align-self: center;
+  line-height: 1.2; font-variant-numeric: tabular-nums; }
+.cal-cel { border: 1px solid var(--borde); border-radius: 7px;
+  padding: 7px 9px 8px; min-height: 100px; position: relative;
+  display: flex; flex-direction: column; gap: 1px; }
+.cal-dia { position: absolute; top: 6px; right: 8px; font-size: 10px;
+  color: var(--texto-3); font-variant-numeric: tabular-nums; }
+.cal-cob { font-size: 17px; font-weight: 800; letter-spacing: -.01em;
+  line-height: 1.1; font-variant-numeric: tabular-nums; }
+.cal-hay, .cal-toc { font-size: 10.5px; line-height: 1.35;
+  color: var(--texto-2); font-variant-numeric: tabular-nums; }
+.cal-toc { font-weight: 600; color: var(--texto); }
+.cal-pie { padding-top: 4px; font-size: 10.5px;
+  color: var(--texto-3); font-variant-numeric: tabular-nums; }
+/* La plata rescatada del dia: es la pregunta que el dia responde, asi que
+   va al fondo de la celda, separada por un filo, y no metida en el mismo
+   renglon que "casos · contesto" como estaba antes. Verde cuando hubo
+   firma — es la unica buena noticia de la celda — y apagada cuando no. */
+.cal-rescatado { margin-top: auto; padding-top: 5px;
+  border-top: 1px dashed var(--borde); font-size: 11px; font-weight: 700;
+  color: var(--ok); font-variant-numeric: tabular-nums; }
+.cal-rescatado b { font-weight: 700; }
+.cal-rescatado.cero { color: var(--texto-3); font-weight: 500;
+  font-style: italic; }
+.cal-cel.vacia { background: var(--superficie-2); border-style: dashed;
+  align-items: center; justify-content: center; }
+.cal-nada { font-size: 10.5px; color: var(--texto-3); }
+/* La celda de un dia fuera del rango de fecha elegido (borde de una semana
+   que solo entra a medias): sin borde ni texto, para que no compita con
+   las celdas reales -- es un hueco de alineacion de la grilla, no un dato. */
+.cal-cel.cal-fuera-rango { border: 0; background: transparent;
+  align-items: center; justify-content: center; opacity: .35; }
+/* La rampa. Los pasos son de la escala de ambar de la marca, del mas claro
+   al mas oscuro, y el texto salta a blanco solo en los dos ultimos, donde
+   el fondo ya no da contraste con tinta. */
+.cal-cel.n1 { background: #FDF6E3; border-color: #F2E3B8; }
+.cal-cel.n2 { background: #FBE9B8; border-color: #EBD08A; }
+.cal-cel.n3 { background: #F5D274; border-color: #DFB947; }
+.cal-cel.n4 { background: #D9A21A; border-color: #B88400; }
+.cal-cel.n5 { background: #96700B; border-color: #7A5A08; }
+/* La tinta de la celda teñida NO puede salir de los tokens de texto de la
+   pagina: --texto-2 y --texto-3 estan calculados contra fondo blanco y sobre
+   el ambar se caen a 3,09:1 y 1,54:1. Se midio paso por paso en los dos
+   temas y esto es lo que pasa AA:
+
+     claro  n1-n4  tinta #141310 al 100% (8,08:1 en el peor) y el texto
+                   secundario al 72%, que da 4,72:1 en n4
+            n5     blanco PLENO — al 90% cae a 4,03:1
+     oscuro n1-n4  tinta clara al 100%: al 88% ya falla en n4 (4,03:1), asi
+                   que aca no hay jerarquia por color y la carga el tamano
+            n5     tinta oscura, porque n5 es el paso mas claro del tema
+
+   El verde de --ok tampoco sobrevive: 2,18:1 sobre n4. En celda teñida el
+   numero de firmas se distingue por peso, no por color. */
+.cal-cel.n1 .cal-cob, .cal-cel.n2 .cal-cob,
+.cal-cel.n3 .cal-cob, .cal-cel.n4 .cal-cob,
+.cal-cel.n1 .cal-toc, .cal-cel.n2 .cal-toc,
+.cal-cel.n3 .cal-toc, .cal-cel.n4 .cal-toc,
+.cal-cel.n1 .cal-rescatado, .cal-cel.n2 .cal-rescatado,
+.cal-cel.n3 .cal-rescatado, .cal-cel.n4 .cal-rescatado { color: var(--texto); }
+.cal-cel.n1 .cal-hay, .cal-cel.n2 .cal-hay,
+.cal-cel.n3 .cal-hay, .cal-cel.n4 .cal-hay,
+.cal-cel.n1 .cal-pie, .cal-cel.n2 .cal-pie,
+.cal-cel.n3 .cal-pie, .cal-cel.n4 .cal-pie,
+.cal-cel.n1 .cal-dia, .cal-cel.n2 .cal-dia,
+.cal-cel.n3 .cal-dia, .cal-cel.n4 .cal-dia,
+.cal-cel.n1 .cal-rescatado.cero, .cal-cel.n2 .cal-rescatado.cero,
+.cal-cel.n3 .cal-rescatado.cero, .cal-cel.n4 .cal-rescatado.cero {
+  color: rgba(20,19,16,.72); }
+.cal-cel.n1 .cal-pie b, .cal-cel.n2 .cal-pie b,
+.cal-cel.n3 .cal-pie b, .cal-cel.n4 .cal-pie b { color: var(--texto); }
+.cal-cel.n5 .cal-cob, .cal-cel.n5 .cal-toc, .cal-cel.n5 .cal-hay,
+.cal-cel.n5 .cal-pie, .cal-cel.n5 .cal-dia, .cal-cel.n5 .cal-rescatado,
+.cal-cel.n5 .cal-pie b { color: #fff; }
+.cal-cel.n1 .cal-rescatado, .cal-cel.n2 .cal-rescatado,
+.cal-cel.n3 .cal-rescatado, .cal-cel.n4 .cal-rescatado,
+.cal-cel.n5 .cal-rescatado { border-top-color: rgba(20,19,16,.18); }
+.cal-cel.n5 .cal-rescatado { border-top-color: rgba(255,255,255,.28); }
+
+/* Por encima del 100% la lista ataco sobrantes de dias anteriores: se marca
+   con un filo en vez de recortar la barra a 100, que borraria justo el dia
+   que interesa. */
+.cal-cel.desborde { box-shadow: inset 0 0 0 2px var(--ok); }
+
+:root[data-tema="oscuro"] .cal-cel.n1 { background: #2A2515; border-color: #3D3620; }
+:root[data-tema="oscuro"] .cal-cel.n2 { background: #3D3418; border-color: #554824; }
+:root[data-tema="oscuro"] .cal-cel.n3 { background: #5C4C15; border-color: #7A651C; }
+:root[data-tema="oscuro"] .cal-cel.n4 { background: #8A6608; border-color: #A87D0A; }
+:root[data-tema="oscuro"] .cal-cel.n5 { background: #B88400; border-color: #D19700; }
+:root[data-tema="oscuro"] .cal-cel.n1 .cal-hay,
+:root[data-tema="oscuro"] .cal-cel.n2 .cal-hay,
+:root[data-tema="oscuro"] .cal-cel.n3 .cal-hay,
+:root[data-tema="oscuro"] .cal-cel.n4 .cal-hay,
+:root[data-tema="oscuro"] .cal-cel.n1 .cal-pie,
+:root[data-tema="oscuro"] .cal-cel.n2 .cal-pie,
+:root[data-tema="oscuro"] .cal-cel.n3 .cal-pie,
+:root[data-tema="oscuro"] .cal-cel.n4 .cal-pie,
+:root[data-tema="oscuro"] .cal-cel.n1 .cal-dia,
+:root[data-tema="oscuro"] .cal-cel.n2 .cal-dia,
+:root[data-tema="oscuro"] .cal-cel.n3 .cal-dia,
+:root[data-tema="oscuro"] .cal-cel.n4 .cal-dia,
+:root[data-tema="oscuro"] .cal-cel.n1 .cal-rescatado,
+:root[data-tema="oscuro"] .cal-cel.n2 .cal-rescatado,
+:root[data-tema="oscuro"] .cal-cel.n3 .cal-rescatado,
+:root[data-tema="oscuro"] .cal-cel.n4 .cal-rescatado { color: var(--texto); }
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-cob,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-toc,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-hay,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-pie,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-dia,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-rescatado,
+:root[data-tema="oscuro"] .cal-cel.n5 .cal-pie b { color: #16130C; }
+
+.cal-leyenda { display: flex; gap: 20px; flex-wrap: wrap;
+  align-items: center; margin-top: 11px; }
+.cal-esc { display: flex; gap: 4px; align-items: center; font-size: 10.5px;
+  color: var(--texto-3); }
+.cal-esc i { width: 17px; height: 11px; border-radius: 2px; display: block;
+  border: 1px solid var(--borde); }
+.cal-esc i.n1 { background: #FDF6E3; }
+.cal-esc i.n2 { background: #FBE9B8; }
+.cal-esc i.n3 { background: #F5D274; }
+.cal-esc i.n4 { background: #D9A21A; }
+.cal-esc i.n5 { background: #96700B; }
+.cal-clave { font-size: 11px; color: var(--texto-3); line-height: 1.4; }
+.cal-clave b { color: var(--texto-2); font-weight: 600; }
+
+/* ---- El acuerdo sobre la fecha de la cosecha --------------------------
+   Reemplaza los dos selectores que habia aca (reloj y universo). Es un
+   bloque de lectura, no un control: la definicion ya se decidio y lo que
+   hace falta es que este escrita donde se lee el mapa. Va en azul de
+   jerarquia y no en amarillo de aviso — no es una advertencia, es el
+   contrato. */
+.acuerdo { border: 1px solid var(--borde); border-left: 4px solid var(--s1);
+  border-radius: 8px; background: var(--superficie); padding: 12px 16px 13px;
+  margin: 4px 0 14px; }
+.acuerdo-tit { font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--s1); margin-bottom: 7px; }
+.acuerdo p { margin: 0 0 7px; font-size: 12.5px; color: var(--texto-2);
+  line-height: 1.6; }
+.acuerdo p:last-child { margin-bottom: 0; }
+.acuerdo code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; background: var(--superficie-2); border-radius: 4px;
+  padding: 1px 5px; color: var(--texto); }
+.acuerdo-campo { font-size: 12px; }
+.acuerdo-fino { color: var(--texto-3); font-size: 11.5px; }
+
+/* ---- Escalera del universo -------------------------------------------
+   Plegada: responde una pregunta frecuente pero no es el contenido del
+   frente. Abierta compite con los mapas por atencion. */
+.escalera { border: 1px solid var(--borde); border-radius: var(--radio);
+  background: var(--superficie); margin-bottom: 14px; }
+.escalera > summary { cursor: pointer; padding: 11px 16px; font-size: 13px;
+  color: var(--texto-2); list-style: none; }
+.escalera > summary::-webkit-details-marker { display: none; }
+.escalera > summary::before { content: '▸ '; color: var(--texto-3); }
+.escalera[open] > summary::before { content: '▾ '; }
+.escalera > summary:hover { color: var(--texto); }
+.escalera > summary b { color: var(--texto); font-weight: 700; }
+.escalera-cuerpo { padding: 0 16px 14px; }
+tr.esc-menos td { color: var(--mal); }
+tr.esc-menos td.esc-nota { color: var(--texto-2); }
+tr.esc-tot td { font-weight: 600; background: var(--superficie-2); }
+td.esc-nota { font-size: 12px; color: var(--texto-2); }
+</style>
