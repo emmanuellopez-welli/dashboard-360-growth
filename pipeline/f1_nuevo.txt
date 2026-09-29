@@ -1,0 +1,222 @@
+  /* El equivalente de la tabla de cosechas pero un paso ANTES: en el
+     pipeline comercial, cuando todavia es un negocio y no una sede. Dice
+     cuantos deals entraron cada mes y cuantos se fueron cerrando ganados. */
+  var dc = f.dealsCohorte || {};
+  if (dc.hay && (dc.filas || []).length) {
+    h += '<h2 class="sec">1 · Los deals que entraron, ¿se cierran?</h2>' +
+      '<p class="sec-sub">negocios de HubSpot por mes de creación y cuántos llegaron a ' +
+      'cierre ganado · ' + esc(dc.universo || '') +
+      (dc.excluidos ? ' · se excluyen los cerrados perdidos por ' +
+        esc(dc.excluidos) : '') + '</p>';
+    h += tablaCohorte(dc.filas, dc.offsets, fNum,
+      'Deals ganados · acumulado',
+      'De los deals que entraron ese mes, cuántos ya están en cierre ganado al mes N. ' +
+      'Solo sube.',
+      'acum', '% del mes que ya cerró ganado', 'Deals', true);
+  }
+
+  if ((em.kpis || []).length) {
+    // El titulo no lleva el nombre del origen: la etiqueta viene en
+    // mayusculas del catalogo de HubSpot ("que trajo EVENTO") y se lee mal.
+    // El universo va en el subtitulo, que ya es explicito.
+  // --- 1. Cuántas clínicas nuevas, y cuántas las trajo marketing ------
+  if (f.shareKpi) {
+    var sm = f.shareMkt || {};
+    h += '<h2 class="sec">2 · ¿Cuántas sedes ganamos?</h2>' +
+      '<p class="sec-sub">sedes creadas cada mes en todo el negocio, y cuántas trajo ' +
+      'marketing</p>';
+    /* La tarjeta lleva el total arriba y el aporte de marketing destacado
+       debajo: el porcentaje es el titular del frente y tiene que leerse de
+       un golpe, sin buscarlo en una tabla. */
+    // Se inserta antes del ULTIMO </div>, que es el cierre de la tarjeta.
+    // Con replace() normal caeria en el primer </div> — el del label — y el
+    // bloque saldria arriba y heredando el estilo de la etiqueta.
+    var htmlKpi = tarjetaKPI(f.shareKpi);
+    var corte = htmlKpi.lastIndexOf('</div>');
+    var tarjeta = htmlKpi.substring(0, corte) +
+      '<div class="kpi-parte">' +
+      '<span class="n">' + fNum(sm.sedes || 0) + '</span>' +
+      '<span class="pc">' + fPct(sm.pct || 0) + '</span>' +
+      '<span class="l">' + esc(sm.etiqueta || '') + '</span>' +
+      '</div>' + htmlKpi.substring(corte);
+    h += '<div class="grid2">' +
+      '<div class="kpis">' + tarjeta + '</div>' +
+      panel('Sedes nuevas por mes',
+        'total del negocio contra las que trajo marketing',
+        leyenda([{ nombre: 'Todos los orígenes', color: 'var(--s1)' },
+                 { nombre: 'Marketing', color: 'var(--s2)' }]), 'gF1Share') +
+      '</div>';
+    pintar('gF1Share', function (el) {
+      var sh = f.share || [];
+      chGrupos(el, sh.map(function (x) { return x.mes; }), [
+        { nombre: 'Todos los orígenes', color: 'var(--s1)',
+          valores: sh.map(function (x) { return x.todas; }) },
+        { nombre: 'Marketing', color: 'var(--s2)',
+          valores: sh.map(function (x) { return x.mktReal; }) }
+      ], { gran: 'mes', formato: fNum, alto: 200 });
+    });
+    if (f.shareLectura) h += '<div class="lectura">' + esc(f.shareLectura) + '</div>';
+  }
+
+  // --- 3. Las clínicas que entraron y de qué calidad ------------------
+  var cos = f.cosechas || [];
+  var comp = f.composicion || {};
+  h += '<h2 class="sec">3 · Las clínicas que entraron y de qué calidad</h2>' +
+    '<p class="sec-sub">la clasificación de aliado decide si la sede recibe gestión ' +
+    'dedicada</p>';
+  /* Dona en vez de barras: son cuatro clases que suman un todo con
+     significado (el universo elegido), y el total va al centro. La clase A
+     no viene como columna en HubSpot — es la resta del universo menos AA,
+     AAA y las que no tienen clasificación. */
+  /* Dos donas del MISMO mes que la tarjeta de arriba: las que entraron y,
+     al lado, las que trajo marketing. Puestas juntas y con las mismas
+     categorias, se lee de un golpe si marketing trae mejor o peor calidad
+     que el resto — que es la pregunta del frente. */
+  var COLCL = { 'AAA': 'var(--s3)', 'AA': 'var(--s2)', 'A': 'var(--s1)',
+                'Sin clasificar': 'var(--borde-fuerte)' };
+  function pintarTorta(id, datos, n, sub) {
+    pintar(id, function (el) {
+      chTorta(el, (datos || []).map(function (r) {
+        return { etiqueta: r.clase, y: r.n, color: COLCL[r.clase] || 'var(--s4)' };
+      }), { alto: 220, formato: fNum, centroSub: sub,
+        detalle: function (d) {
+          return [{ nombre: 'Sedes', valor: fNum(d.y) },
+                  { nombre: 'del total del mes', valor: fPct(n ? Math.round((d.y / n) * 1000) / 10 : 0) }];
+        } });
+    });
+  }
+  if (comp) {
+    h += '<div class="grid2">' +
+      panel('Las ' + fNum(comp.todas.n) + ' que entraron en ' + esc(comp.mes),
+        'todos los orígenes, por clasificación de aliado', '', 'gF1Torta') +
+      // Sin el desglose por canal: el reparto por origen ya va completo en
+      // la tabla de la seccion 4, y repetirlo aca solo lo desactualiza.
+      panel('Las ' + fNum(comp.mkt.n) + ' que trajo marketing',
+        fPct(comp.mkt.pct) + ' del mes · por clasificación de aliado',
+        '', 'gF1TortaMkt') +
+      '</div>';
+    pintarTorta('gF1Torta', comp.todas.filas, comp.todas.n, 'sedes nuevas de ' + comp.mes);
+    pintarTorta('gF1TortaMkt', comp.mkt.filas, comp.mkt.n, 'de marketing');
+  }
+  // --- Cohortes de deals de HubSpot ---------------------------------
+    h += '<h2 class="sec">4 · ¿En qué termina la demanda que entró?</h2>' +
+      '<p class="sec-sub">' + (em.cohorte
+        ? 'doble corte: las ' + fNum(em.sedes) + ' sedes que entraron en el ' +
+          'período (' + esc(em.mes) + ') y los créditos que radicaron en el ' +
+          'período · ' + esc(em.universo || '')
+        : 'de los créditos radicados en el período · ' + esc(em.universo || '')) +
+      '</p>';
+    h += filaKPIs(em.kpis);
+
+    // Sin esta linea la seccion se lee como el total del mes. No lo es: es
+    // solo la cosecha nueva, y pesa ~1%. Decirlo aqui evita el malentendido
+    // y de paso es el mejor argumento para el frente 2.
+    if (em.contexto) {
+      h += '<div class="lectura">Es la cosecha nueva, no el mes completo: ' +
+        'estas ' + fNum(em.sedes) + ' sedes pusieron ' + fPct(em.contexto.pctMonto) +
+        ' de la plata del período (' + fCopC(em.contexto.monto) + ' en total, ' +
+        fNum(em.contexto.sol) + ' solicitudes). Los otros ' +
+        fCopC(em.contexto.montoResto) + ' los pusieron sedes que entraron en meses ' +
+        'anteriores — por eso el negocio se sostiene en el stock, no en la ' +
+        'adquisición del mes.</div>';
+    }
+
+    if (em.hay) {
+      // El embudo y el monto diario no aportaban: el embudo repetia los tres
+      // numeros que ya estan en las tarjetas, y el monto diario de una
+      // cosecha nueva son 13 barras dispersas sobre 31 dias.
+      // Share de la plata por origen. Los origenes van aunque pongan cero: un
+      // origen que trajo sedes y no puso plata es informacion.
+      if ((em.canales || []).length) {
+        h += '<div style="margin-top:14px">' +
+          panel('¿De qué origen salió esa plata?',
+            fCopC(em.montoCanales) + ' de la cosecha del período, repartidos por ' +
+            'el origen de la sede · sede lograda = sede que firmó al menos un ' +
+            'crédito',
+            tabla([
+              { t: 'Origen', k: 'canal', f: 'txt', txt: true },
+              { t: 'Solicitudes', k: 'sol' },
+              { t: 'Aprobados', k: 'apr' },
+              { t: 'Desembolsos', k: 'des' },
+              { t: 'Conv', k: 'conv', f: 'pct' },
+              { t: 'Sedes logradas', k: 'sedes' },
+              { t: 'Plata', k: 'monto', f: 'cop' },
+              { t: 'Plata/sede', k: 'porSede', f: 'cop' },
+              { t: 'Ticket', k: 'ticket', f: 'cop' },
+              { t: '% de la plata', k: 'pct', f: 'pct' }
+            ], em.canales)) +
+          '</div>';
+      }
+    }
+  }
+
+  // --- 2. La pauta ---------------------------------------------------
+  h += '<h2 class="sec">5 · La pauta: ¿cuánto nos cuesta un lead?</h2>' +
+    '<p class="sec-sub">Meta Ads · no depende del origen de la sede</p>';
+  h += filaKPIs((f.kpis || []).slice(0, 3));
+
+  h += '<div class="grid2" style="margin-top:14px">' +
+    panelGran('Leads', 'formularios de pauta', 'leads', 'gF1Leads') +
+    panelGran('Costo por lead', 'COP — menos es mejor', 'cpl', 'gF1Cpl') +
+    '</div>';
+  pintar('gF1Leads', function (el) {
+    chBarras(el, serieSegunGran(f.serie, 'leads'),
+      { color: 'var(--s2)', nombre: 'Leads', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fNum,
+        vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  pintar('gF1Cpl', function (el) {
+    chLinea(el, serieSegunGran(f.serie, 'cpl'),
+      { color: 'var(--s1)', nombre: 'CPL', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fCop,
+        formatoEje: fCopC, vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  var kImp = (f.kpis || [])[3], kCtr = (f.kpis || [])[4];
+  if (kImp && kCtr && kImp.valor !== null) {
+    h += '<p class="sec-sub" style="margin-top:8px">Alcance de la pauta en el período: ' +
+      esc(fNum(kImp.valor)) + ' impresiones, CTR ' + esc(fPct(kCtr.valor)) + '.</p>';
+  }
+
+  // El CPL no dice si la pauta sirvio: dice que cuesta un formulario. Esto
+  // cierra el ciclo hasta la plata que pusieron las sedes que ese gasto trajo.
+  var rt = f.retorno;
+  if (rt) {
+    h += '<h3 class="sub-sec" style="margin-top:20px">¿Y qué devolvió esa pauta?</h3>' +
+      '<p class="sec-sub">la campaña es a médicos, así que las sedes de origen ' +
+      'social media son el resultado de ese gasto · cosecha de ' + esc(rt.mes) + '</p>';
+    h += filaKPIs(rt.kpis);
+  }
+
+  var sinF = (f.canalesSinFuente || []).filter(function (c) {
+    return c.detalle !== 'conectada' && c.canal.indexOf('Pauta') !== 0;
+  });
+  if (sinF.length) {
+  }
+
+  var ac = f.activacion;
+  if (ac) {
+    // GLOBAL, no el subconjunto de marketing: la pregunta es si las sedes
+    // que entraron arrancan, sin importar quien las trajo.
+    h += '<h2 class="sec">6 · De las sedes que entraron, ¿cuántas arrancaron?</h2>' +
+      '<p class="sec-sub">cosecha de ' + esc(ac.mes) + ' · todos los orígenes · ' +
+      'activa = radicó al menos una solicitud en el mes · exitosa = 3 o más ' +
+      'solicitudes, o ya con desembolso</p>';
+    h += filaKPIs(ac.kpisTodas || ac.kpis);
+    h += '<div class="grid2" style="margin-top:14px">' +
+      panel('De nuevas a exitosas',
+        'las ' + fNum(ac.todas.total) + ' sedes que entraron en ' + esc(ac.mes) +
+        (ac.todas.sinId
+          ? ' · ' + fNum(ac.todas.sinId) + ' sin id_internal, no verificables'
+          : ''),
+        '', 'gF1Act') +
+      '</div>';
+    pintar('gF1Act', function (el) {
+      chBarrasH(el, (ac.pasosTodas || ac.pasos || []).map(function (p) {
+        return { etiqueta: p.etapa, y: p.valor, d: p };
+      }), { color: 'var(--s1)', formato: fNum, anchoEtiqueta: 110,
+        detalle: function (d) {
+          return [{ nombre: 'Sedes', valor: fNum(d.d.valor) },
+                  { nombre: '% de las nuevas del mes', valor: fPct(d.d.pct) }];
+        } });
+    });
+  }

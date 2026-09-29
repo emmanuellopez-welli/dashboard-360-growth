@@ -1,0 +1,42 @@
+  // --- 2. La pauta ---------------------------------------------------
+  h += '<h2 class="sec">2 · La pauta: ¿cuánto nos cuesta un lead?</h2>' +
+    '<p class="sec-sub">Meta Ads · no depende del origen de la sede</p>';
+  h += filaKPIs((f.kpis || []).slice(0, 3));
+
+  h += '<div class="grid2" style="margin-top:14px">' +
+    panelGran('Leads', 'formularios de pauta', 'leads', 'gF1Leads') +
+    panelGran('Costo por lead', 'COP — menos es mejor', 'cpl', 'gF1Cpl') +
+    '</div>';
+  pintar('gF1Leads', function (el) {
+    chBarras(el, serieSegunGran(f.serie, 'leads'),
+      { color: 'var(--s2)', nombre: 'Leads', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fNum,
+        vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  pintar('gF1Cpl', function (el) {
+    chLinea(el, serieSegunGran(f.serie, 'cpl'),
+      { color: 'var(--s1)', nombre: 'CPL', gran: GRAN_PAUTA === 'mes' ? 'mes' : 'dia',
+        formato: fCop,
+        formatoEje: fCopC, vacio: 'Sin datos de Meta Ads en el período' });
+  });
+  var kImp = (f.kpis || [])[3], kCtr = (f.kpis || [])[4];
+  if (kImp && kCtr && kImp.valor !== null) {
+    h += '<p class="sec-sub" style="margin-top:8px">Alcance de la pauta en el período: ' +
+      esc(fNum(kImp.valor)) + ' impresiones, CTR ' + esc(fPct(kCtr.valor)) + '.</p>';
+  }
+
+  // El CPL no dice si la pauta sirvio: dice que cuesta un formulario. Esto
+  // cierra el ciclo hasta la plata que pusieron las sedes que ese gasto trajo.
+  var rt = f.retorno;
+  if (rt) {
+    h += '<h3 class="sub-sec" style="margin-top:20px">¿Y qué devolvió esa pauta?</h3>' +
+      '<p class="sec-sub">la campaña es a médicos, así que las sedes de origen ' +
+      'social media son el resultado de ese gasto · cosecha de ' + esc(rt.mes) + '</p>';
+    h += filaKPIs(rt.kpis);
+  }
+
+  var sinF = (f.canalesSinFuente || []).filter(function (c) {
+    return c.detalle !== 'conectada' && c.canal.indexOf('Pauta') !== 0;
+  });
+  if (sinF.length) {
+  }

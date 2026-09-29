@@ -1,0 +1,38 @@
+  // --- 1. Cuántas clínicas nuevas, y cuántas las trajo marketing ------
+  if (f.shareKpi) {
+    var sm = f.shareMkt || {};
+    h += '<h2 class="sec">1 · Cuántas clínicas nuevas entran cada mes</h2>' +
+      '<p class="sec-sub">sedes creadas cada mes en todo el negocio, y cuántas trajo ' +
+      'marketing</p>';
+    /* La tarjeta lleva el total arriba y el aporte de marketing destacado
+       debajo: el porcentaje es el titular del frente y tiene que leerse de
+       un golpe, sin buscarlo en una tabla. */
+    // Se inserta antes del ULTIMO </div>, que es el cierre de la tarjeta.
+    // Con replace() normal caeria en el primer </div> — el del label — y el
+    // bloque saldria arriba y heredando el estilo de la etiqueta.
+    var htmlKpi = tarjetaKPI(f.shareKpi);
+    var corte = htmlKpi.lastIndexOf('</div>');
+    var tarjeta = htmlKpi.substring(0, corte) +
+      '<div class="kpi-parte">' +
+      '<span class="n">' + fNum(sm.sedes || 0) + '</span>' +
+      '<span class="pc">' + fPct(sm.pct || 0) + '</span>' +
+      '<span class="l">' + esc(sm.etiqueta || '') + '</span>' +
+      '</div>' + htmlKpi.substring(corte);
+    h += '<div class="grid2">' +
+      '<div class="kpis">' + tarjeta + '</div>' +
+      panel('Sedes nuevas por mes',
+        'total del negocio contra las que trajo marketing',
+        leyenda([{ nombre: 'Todos los orígenes', color: 'var(--s1)' },
+                 { nombre: 'Marketing', color: 'var(--s2)' }]), 'gF1Share') +
+      '</div>';
+    pintar('gF1Share', function (el) {
+      var sh = f.share || [];
+      chGrupos(el, sh.map(function (x) { return x.mes; }), [
+        { nombre: 'Todos los orígenes', color: 'var(--s1)',
+          valores: sh.map(function (x) { return x.todas; }) },
+        { nombre: 'Marketing', color: 'var(--s2)',
+          valores: sh.map(function (x) { return x.mktReal; }) }
+      ], { gran: 'mes', formato: fNum, alto: 200 });
+    });
+    if (f.shareLectura) h += '<div class="lectura">' + esc(f.shareLectura) + '</div>';
+  }

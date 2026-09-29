@@ -1,0 +1,2 @@
+  h += cuali(f.textos);
+  return h;

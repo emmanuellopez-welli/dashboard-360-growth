@@ -2294,3 +2294,83 @@ aviso. Convendría mover el toolkit a una carpeta estable (ej.
 `lib.py`, `qa_tablero.js`, `build_previa.js` y la propia tarea. **No se
 hizo en esta sesión** porque toca rutas documentadas en varias secciones y
 había que acordarlo primero.
+
+*(Resuelto el mismo día — ver sección 52.)*
+
+## 52 · El proyecto ya vive en git, y el toolkit salió de Temp (29-sep-2026)
+
+Emmanuel: *"este tablero ya lo están leyendo mucha gente y me da miedo que
+se pierda fácil"*. Tenía razón, y el diagnóstico era peor de lo que parecía.
+
+**Lo que se verificó antes de opinar** (no era intuición):
+- La carpeta del proyecto **no era un repo git** y **no había copia en
+  ningún lado** (ni OneDrive ni backup). `Code.gs` (279 KB), `scripts.html`
+  (191 KB) y el propio `CLAUDE.md` (137 KB, todo el conocimiento del
+  proyecto) existían en UNA sola carpeta del Desktop.
+- El pipeline completo — **419 scripts, 491 MB** — vivía dentro de
+  `AppData\Local\Temp\claude\...`, una carpeta que Windows limpia por
+  diseño. Ya había quedado huérfano una vez (sección 26).
+
+**Lo que se hizo:**
+1. El toolkit se copió a **`Dashboard 360 mkt/pipeline/`**. Los scripts de
+   exploración de una sola vez (`probe_*`, `test_*`, `verif_*`) fueron a
+   `pipeline/_scratch/` para que la carpeta principal se pueda leer.
+2. Se reapuntaron las rutas absolutas (10 archivos). **Ojo con la trampa**:
+   había DOS variantes de la misma ruta, con `C--Users` y con `c--Users`
+   (mayúscula y minúscula), y un `sed` que solo cubría una dejaba 8
+   archivos rotos en silencio.
+3. `git init` + repo privado en
+   `github.com/emmanuellopez-welli/dashboard-360-growth`. **446 archivos en
+   el primer commit.**
+4. La tarea `Welli_Reproceso_7am` se reapuntó a la ubicación nueva.
+5. Se escribió un `README.md` para que otra persona pueda retomar esto sin
+   contexto previo.
+
+**LO MÁS IMPORTANTE DE ESTA SECCIÓN — la auditoría antes del push encontró
+tres cosas que NO podían subir, y las tres se habrían filtrado:**
+
+1. **24 scripts tenían el token de HubSpot (`pat-na1-...`) hardcodeado.**
+   Eran `probe_*`, `test_*`, `verif_*` y los cuatro `pull_lt_wa_native*.py`.
+   Se sanitizaron en la copia: ahora leen `lib.KEYS['HUBSPOT_PRIVATE_TOKEN']`
+   del `.env`. **Ese token estuvo en texto plano en disco durante semanas —
+   conviene rotarlo en HubSpot.**
+2. **`.mcp.json` lleva la `x-consumer-api-key` de Composio en texto plano.**
+   Quedó staged en el primer intento y solo lo atrapó el control explícito.
+   Está en `.gitignore`.
+3. **`sin_mensaje_134.csv` tenía nombres, CÉDULAS y teléfonos de 134
+   pacientes** (salido del análisis del embudo de WhatsApp, sección 49).
+   Alcanzó a entrar al commit local; se sacó con `git rm --cached` + amend
+   ANTES del push, así que nunca llegó a GitHub. **Datos de habeas data no
+   se versionan nunca**, aunque el repo sea privado. El `.gitignore` ahora
+   cubre `sin_mensaje_*.csv`, `*_pacientes*.csv` y `*aprobados*.csv`.
+
+**Regla para cualquier commit futuro en este repo**: antes de `git push`,
+correr la auditoría sobre lo que está staged, no sobre el working tree:
+
+```bash
+git diff --cached | grep -icE "pat-na1-[a-z0-9]{10}|ck_[A-Za-z0-9]{18}|COMPOSIO_API_KEY=|META_ACCESS_TOKEN="
+git diff --cached --name-only | grep -iE "^\.env|^\.mcp|\.csv$"
+```
+
+Los dos tienen que dar vacío/cero. Este proyecto mezcla código con datos de
+pacientes reales todo el tiempo (listas de teléfonos, cédulas, montos), así
+que el riesgo no es teórico: **de tres hallazgos, dos los atrapó el control
+y no el `.gitignore` escrito de antemano.**
+
+**Qué NO se versiona y por qué**: `.env` y `.mcp.json` (secretos),
+`sheet_data.json` y `tables_*.json` (datos regenerables, 22 MB que
+ensuciarían cada diff), `node_modules/`, `artifact_tablero.html` (14 MB
+generados), los logs del reproceso, y cualquier `.csv`/`.xlsx` de análisis
+puntual (suelen traer PII).
+
+**Pendientes que quedaron de este mismo hilo** (en orden de valor):
+- **Rotar el token de HubSpot** que estuvo hardcodeado.
+- **Service account de GCP** (sección 51) — sin eso el reproceso de las 7am
+  sigue fallando casi todos los días.
+- **Migrar la gente al `/exec`** en vez del artefacto: el `/exec` lee el
+  Sheet en vivo, así que con el reproceso automático quedaría siempre
+  fresco sin paso manual. El artefacto, al llevar los datos embebidos,
+  SIEMPRE va a necesitar una sesión de Claude para republicarse.
+- **Sacar `CREDITO_DIA` del Sheet** (125 mil filas): es el origen del techo
+  de 10M celdas (sección 43) y de que el artefacto pese 14 MB. Es un
+  rediseño, no un parche.

@@ -1,0 +1,247 @@
+Priorización del Rescate 
+ Rescate · documento interno
+ Cómo decidimos a quién llamar
+ La lista diaria de Kevin no es una cola por fecha de vencimiento: es una apuesta calculada sobre 2.931 créditos aprobados. Esto explica cómo se arma, qué dice la operación de esta semana, y dónde tendría que entrar un bot.
+ 27 de agosto de 2026 · datos del 24 al 27
+ El embudo, etapa por etapa
+ Cada mañana a las 7:00 el motor recorre estas ocho etapas. Los números son los de hoy.
+ 1 
+ El universo 2.931 
+ Créditos en estado approved con menos de 30 días. El reloj es la fecha real de aprobación, no la fecha de corte del reporte — esa viene rezagada y mandaba todo a la cosecha vieja.
+ 2 
+ Fuera lo que no nos toca
+ Salen las sedes CreditOp (Sonria, Dentix, Dentisalud), que tienen su propio frente. Sale medicina alternativa: se recupera al 0,6%, el peor desempeño medido.
+ 3 
+ Fuera lo que no se cierra con un mensaje
+ Si le aprobamos menos del 90% de lo que pidió, el problema no es de gestión sino de cupo. Con recorte de hasta 10% sí entra, marcado como negociar : se sube el cupo y se cierra.
+ 4 
+ Fuera lo que no se puede trabajar 11 
+ Sin celular no hay cómo contactarlo; sin documento no hay cómo registrar la gestión ni evitar que reaparezca mañana. Quedan 710 salvables .
+ 5 
+ Cuánto vale perseguir a cada uno
+ Valor esperado = probabilidad de recuperación × monto aprobado. Es el corazón de la priorización y merece su propia sección.
+ 6 
+ Balanceado por cosecha 52 
+ 13 de cada ventana de antigüedad, no los 52 mejores del total. Más 100 de reserva para cuando el día rinda.
+ 7 
+ Por dónde empezar
+ Se consulta el estado de cada conversación en hilos y la tarjeta dice si conviene llamar o escribir. Un paciente que leyó tu WhatsApp tiene el número bueno.
+ 8 
+ Nada se repite
+ Quien tuvo gestión en los últimos 14 días no vuelve a la lista.
+ La parte contraintuitiva
+ El rescate se juega al revés del día cero, y es lo que más cuesta explicar.
+ Medido sobre 25.236 créditos que no firmaron en los primeros dos días 
+ Especialidad
+ Convierte el día 0
+ Se rescata después
+ Medicina alternativa
+ 75%
+ 0,6%
+ Cirugía plástica
+ 27%
+ 12,4%
+ La razón es de comportamiento, no de crédito. En una decisión pequeña e impulsiva, no tomarlo hoy significa que perdió el interés y no vuelve. En una decisión grande — una cirugía, una bariátrica — estancarse es normal : sigue interesado, está cuadrando plata y fechas. Por eso priorizar con la tasa de conversión global mandaría a Kevin a perseguir justo a los irrecuperables.
+ Qué pesa en la probabilidad
+ El modelo es una regresión logística entrenada sobre los estancados trabajables. Estos son los pesos reales:
+ Clínica 0,90 
+ Score Experian −0,23 
+ Monto 0,02 
+ Especialidad 0,01 
+ La clínica manda , y por mucho. Dónde se va a atender el paciente predice si vuelve mejor que cualquier atributo suyo. Y el score va invertido : a mayor score, menor recuperación. Suena raro hasta que se piensa: quien tiene buen score consigue plata en otro lado.
+ El backtest captura 71% del valor en el top 30% de la lista, contra 65% de la heurística por especialidad que usábamos antes. La probabilidad se topa en 35% para que ningún caso monopolice la lista.
+ Por qué cosechas y no una sola fila
+ Si ordenáramos solo por valor esperado, los montos altos recientes se comerían el día y los que vencen mañana quedarían sin tocar. Si ordenáramos solo por vencimiento, gastaríamos la mañana en los más fríos. Por eso el día se reparte en cuatro ventanas iguales:
+ ≤ 7 días Recién 13 
+ 8 – 15 Media 13 
+ 16 – 23 Madura 13 
+ 24 – 30 Por vencer 13 
+ Dentro de cada ventana sí manda el valor esperado. Así todos los días se toca lo urgente y lo fresco.
+ Qué pasó esta semana
+ 171 gestiones entre lunes y jueves. Kevin dejó nota en el 100% de los casos.
+ 171 casos trabajados 
+ 97 contestaron el teléfono 
+ 63 hablaron con Kevin 
+ 2 firmaron 
+ Tres cosas que salen del dato y que conviene mirar antes de diseñar nada:
+ WhatsApp se trabaja, pero el dato no lo muestra
+ 130 gestiones quedaron como «Ambos» y 41 como «Llamada»; cero como WhatsApp solo. Eso hace parecer que el canal no se usa — y las notas dicen lo contrario: 203 de 335 mencionan «se deja mensaje en WhatsApp» . Kevin escribe por ahí en seis de cada diez casos. Lo que falla es el registro, no la operación, y por eso ninguna métrica de canal sirve hoy para decidir nada.
+ El teléfono decide el desenlace, aunque WhatsApp diga otra cosa
+ 75 casos quedaron marcados como negativos o sin contacto teniendo señal de compromiso en WhatsApp — $730 M en juego. Siete de ellos seguían con intención explícita cuando revisamos: piden ayuda, respondieron, dijeron que les interesa. La tarjeta ya muestra la alerta correcta; la causal igual se llena con lo que pasó en la llamada.
+ «Otro» es el cajón donde vive la información útil
+ 21 casos cayeron ahí esta semana, y las notas muestran que no son un cajón de sastre sino cinco causales que faltan:
+ Decide con la pareja o la familia — el titular no decide solo
+ Espera fecha o valoración de la clínica — «la cirugía es en octubre», «no sabe el valor»
+ Pidió que lo llamen a otra hora — «comuníquense a las 4:00 pm»
+ Contestó un tercero — el número es de otra persona
+ Va a pagar de contado — hoy se confunde con «ya pagó»
+ Y aparece un caso operativo que no es de rescate: pacientes que no tomaron el crédito porque en la clínica les dijeron que el desembolso se demora. Eso es un problema con el aliado, no con el paciente.
+ De la lista a la firma
+ El recorrido completo de los 340 casos trabajados entre el 31 de julio y el 27 de agosto. Cada barra es proporcional al total.
+ Casos trabajados 340 100% 
+ Llamada realizada 336 99% 
+ Contestó alguien 179 53% 
+ …y colgó 58 17% 
+ …era un tercero 6 2% 
+ Habló con Kevin 115 34% 
+ Se mostró interesado 22 6% 
+ Firmó 10 3% 
+ El WhatsApp va aparte: Kevin deja mensaje en 203 de los 340 casos según sus propias notas, pero eso no se registra como canal y no hay forma de saber qué mensaje produjo qué. Y la señal de conversación que trae la lista es de las 7:00 a.m., antes de la gestión — es contexto de entrada, no resultado.
+ Contestar no es el problema. Los primeros segundos sí
+ Más de la mitad de las llamadas encuentran a alguien del otro lado. Lo que se rompe es lo que pasa enseguida: 58 personas contestaron y colgaron , y en cinco notas Kevin registra que cortaron justo cuando dijo de dónde llamaba. Eso no se arregla con mejor priorización ni con más intentos — se arregla con otra apertura.
+ Siete de las diez firmas decían «No contesta»
+ De los diez casos trabajados que terminaron firmando, siete estaban registrados como que no habían contestado el teléfono. Firmaron entre uno y quince días después. La causal describe cómo terminó la llamada, no cómo terminó el caso — y como el WhatsApp que Kevin deja no queda registrado, hoy no podemos atribuir una sola firma a una acción concreta . Es la pieza que más falta para poder decidir con datos.
+ El 3% es un piso, no el resultado
+ De los 340 trabajados, 259 siguen aprobados — vivos, dentro de su ventana, todavía en juego. Solo 44 están perdidos de verdad. Otros 24 no cruzaron contra ningún crédito, que es algo para revisar aparte. La tasa final de este período todavía no se puede leer.
+ 10 firmaron 
+ 259 siguen vivos 
+ 44 se vencieron 
+ 24 sin cruce 
+ Qué dicen los pacientes
+ 335 notas entre el 31 de julio y el 27 de agosto, una por cada caso trabajado. Es el único lugar del sistema donde queda la voz del paciente, y contradice varias cosas que uno supondría.
+ Qué pasó
+ Casos
+ Qué significa
+ No llegamos a hablar con la persona · 214 de 335
+ No contesta
+ 151
+ El teléfono suena y nadie atiende
+ Cuelga
+ 57
+ Contesta y corta; en cinco notas, justo al decir de dónde llamamos
+ Contesta un tercero
+ 6
+ El número es de otra persona
+ Dijeron que no · 62
+ No va a hacerse el tratamiento
+ 54
+ El rechazo es al procedimiento, no al crédito
+ No le da la capacidad
+ 4
+ Sabe que no puede endeudarse
+ Paga de contado
+ 4
+ Resolvió por otro medio
+ El freno no es el paciente · 11
+ La cirugía es más adelante
+ 5
+ Octubre, noviembre, «dentro de un año»
+ Espera precio o cita de la clínica
+ 4
+ La clínica no le ha dicho cuánto cuesta
+ Se fue a otra clínica
+ 1
+ Le pareció costoso donde cotizó
+ La clínica lo desalentó
+ 1
+ Le dijeron que el desembolso se demora un mes
+ Sí quiere, con condiciones · 34
+ Pidió otra hora o fecha
+ 18
+ Dio una cita concreta y verificable
+ Decide con la pareja o la familia
+ 6
+ El titular no decide solo
+ La tasa le parece alta
+ 4
+ Objeción negociable
+ Quiere tomarlo
+ 4
+ Dijo que sí, falta cerrar
+ Compara con otra financiera
+ 2
+ Está evaluando, no descartando
+ El «no» casi nunca es a Welli
+ Sesenta y dos pacientes dijeron que no, y la frase que más se repite es «no va a tomar tratamiento médico» . No están rechazando el crédito: están decidiendo no operarse, o descubriendo que solo estaban cotizando. Eso significa que buena parte del pool nunca fue una venta perdida — nunca fue una venta.
+ Muchas veces el problema está en la clínica
+ Un paciente no firma porque la clínica no le ha dado el costo del tratamiento. Otro espera una cita de valoración para el 11 de septiembre. Otro no tomó el crédito porque en la clínica le dijeron que el desembolso se demora más de un mes — y eso último Kevin lo escaló a la comercial del aliado, que es exactamente lo que había que hacer. Contra este grupo no hay guion ni bot que sirva: es gestión con el aliado.
+ La ventana de 30 días pelea con el calendario médico
+ Las notas están llenas de fechas que no caben: la cirugía es en octubre, la valoración el 30 de septiembre, el médico dijo que hasta noviembre. Kevin lo repite en nota tras nota — «se menciona vencimiento de 30 días» , «le quedan 09 días» — como quien avisa de un tren que ya va a salir. Y son justo las especialidades de decisión larga, cirugía plástica y bariátrica, las que mejor se rescatan. El preaprobado vence antes de que la decisión madure.
+ Dieciocho pacientes dieron una cita y nadie la anotó
+ «Comuníquense a las 4:00 pm». «El 28 de agosto». «El 11 de septiembre, después de la valoración». Dieciocho notas contienen una cita concreta que el paciente ofreció. El campo próximo contacto está lleno en 5 de 340 gestiones de toda la historia — y solo en 5 de esas 18 citas. La información existe, está escrita, y no está en ninguna parte donde un sistema pueda usarla.
+ Cómo se ve un arreglo en los datos
+ Hasta mediados de agosto, entre 1 y 28 tarjetas por día llegaban sin cédula, sin nombre y sin teléfono — y como el monto sí venía, se iban al tope de la lista. Kevin las registraba con la única nota posible: «No hay información del cliente para poder realizar gestión» .
+ Desde el 17 de agosto la lista sale con 152 filas y 152 pacientes distintos, once días seguidos . Ni una tarjeta vacía, ni un duplicado.
+ Qué acción termina en firma
+ Hasta hoy la causal describía cómo terminó la llamada y el desenlace del crédito vivía en otra tabla, en otra región, sin forma de cruzarlos. Ya están en la misma fila: rescate.seguimiento une lo que se hizo, lo que pasó en WhatsApp después, y si el crédito terminó firmado.
+ Lo que el caso dijo
+ Casos
+ Firmas
+ Tasa
+ Mostró intención de firmar
+ 19
+ 4
+ 21,1%
+ No se pudo contactar
+ 224
+ 12
+ 5,4%
+ Dijo que no, u «Otro»
+ 148
+ 2
+ 1,4%
+ Contestó y colgó
+ 86
+ 1
+ 1,2%
+ Objeción negociable (tasa, monto, plazo)
+ 14
+ 0
+ 0%
+ Un «no» pesa. Un «no contesta», mucho menos de lo que parece
+ De los 224 casos que no se pudieron contactar, doce firmaron — entre cero y veinte días después, con mediana de cuatro, por $221 M. Es la mayor fuente de recuperación del período. La causal más frecuente del tablero, la que parece un fracaso, es la que más plata trajo.
+ Del otro lado, 234 casos cerraron en negativo o colgaron y solo tres firmaron: 1,3% , contra 5,4% de los inalcanzables y 21,1% de los que mostraron intención. Perseguir a quien no contesta paga cuatro veces más que insistirle a quien ya dijo que no.
+ Corrección sobre la versión anterior de esta página: con un mes de datos ese grupo tenía cero firmas, y así se publicó. Con cinco semanas son tres. La conclusión —que un «no» casi nunca se revierte— aguanta; el «ninguno» era prematuro. Uno de los tres es Luis Albeiro Vélez , que pedía ayuda por WhatsApp mientras la llamada se registraba como «Cuelga»: firmó tres días después, por $9 M.
+ Una regla que propusimos y el dato no respalda
+ Entre las reglas de traspaso de más abajo está «objeción que se negocia» — mandar a Kevin a quien dude de la tasa, el monto o el plazo. Con los datos de agosto, esos catorce casos convirtieron cero . Catorce es poco para cerrar el asunto, pero suficiente para no darla por buena: queda en observación , no como regla firme, hasta tener un par de meses.
+ El WhatsApp empieza a mostrar señal
+ Los casos con toque de WhatsApp registrado firmaron al 5,2% (14 de 268); los que no, al 2,2% (5 de 223). Es más del doble, pero con diecinueve firmas en total la diferencia todavía puede ser azar: chi² = 2,91, p ≈ 0,09 — por encima del 0,05 que se suele exigir. Sugerente, no concluyente.
+ Lo que importa es que la pregunta ya se puede hacer. Hace un mes no había forma de cruzarla; con unas semanas más de datos, el mismo cálculo va a dar una respuesta con la que se pueda decidir.
+ Límite honesto: la API de hilos expone el primer mensaje de cada conversación, no el hilo completo. Si el paciente respondió dentro de una conversación ya abierta, no se ve. «Respondió después» es un piso, no un conteo exacto. Y cuando la API no responde, el campo queda en nulo — nunca en cero.
+ Dónde entra el bot
+ El grueso del día de Kevin no es convencer a nadie: es intentar alcanzar gente. De 171 casos, 105 no contestaron el teléfono y 66 más habían leído el WhatsApp sin responder. Eso es lo que un bot hace mejor — insistir sin cansarse, a la hora que el paciente sí está.
+ El bot se queda con
+ El primer contacto de los que no tienen conversación abierta
+ El seguimiento de «leyó y no respondió», que es el 39% de la lista
+ Reagendar: capturar la hora que el paciente pide y dejarla registrada
+ Preguntar por la fecha de cirugía o de valoración, y volver cuando toque
+ Responder lo informativo: tasa, plazo, cuota, cómo se firma
+ Confirmar si sigue interesado antes de gastarle una llamada a Kevin
+ Kevin recibe
+ Todo lo que abajo dispare una regla de traspaso
+ Lo que el bot no supo clasificar en dos intentos
+ Cualquiera que pida hablar con una persona
+ Cuándo la conversación pasa a Kevin
+ Cinco reglas. Las tres primeras ya las detecta el clasificador de intención que corre hoy sobre las respuestas de WhatsApp; las dos últimas salen de la lista misma.
+ Regla
+ Se dispara cuando
+ Esta semana
+ Pide ayuda 
+ El paciente escribe «no me deja», «no me llegó el código», «necesito hablar con alguien». Es una persona atascada en el flujo, y cada minuto cuenta.
+ 4
+ Va a firmar 
+ Dice que quiere tomarlo, pregunta cómo sigue, o manda su documento. Es el momento de cierre y no se delega a un bot.
+ 5
+ Objeción que se negocia 
+ Duda de tasa, de monto o de plazo. Requiere ofrecer algo — y en los casos marcados «negociar» hay cupo real que subir. En observación: catorce casos así, cero firmas.
+ 7
+ Monto alto por vencer 
+ Diez millones o más y le quedan tres días o menos. Aunque no haya dado señal, el costo de perderlo justifica la llamada.
+ 13
+ Se lo pidió 
+ Pide explícitamente hablar con una persona. Sin condiciones.
+ —
+ Promedio diario que le llegaría a Kevin
+ 7 de 43 
+ Bajo estas reglas, el 17% de los casos llega a un humano. Kevin pasa de trabajar 43 casos al día a trabajar 7 — pero son los 7 que valen, y les puede dedicar el tiempo que hoy se le va marcando números que nadie contesta.
+ Cuándo no pasar
+ Si el paciente dijo que no, no se escala. La regla operativa que ya usa el equipo es la correcta: no gastes una llamada, deja la puerta abierta con un mensaje. Escalar un «no» quema el caso y el tiempo.
+ Lo que hay que definir antes de construir
+ Cuánto tarda en verse una firma. La mediana son tres días y el máximo quince, así que ningún corte semanal alcanza a atribuir bien. El seguimiento se rehace todos los días sobre una ventana de 30.
+ Quién es el dueño después del traspaso. Hoy, cuando alguien atiende una conversación en el inbox de hilos, eso no queda en la tabla de gestión — desde el tablero el caso parece muerto. Esta semana pasó con 14 casos.
+ Cuánto tiempo tiene Kevin para tomar un traspaso. Alguien que pide ayuda a las 10 de la mañana y recibe respuesta al otro día ya no está.
+ Qué hace el bot con el campo «próximo contacto». Está en el formulario, nadie lo usa, y es exactamente lo que un bot sí sabe respetar. Es la pieza que falta para que «pospone» deje de ser un callejón.
+ Si el bot escribe en el mismo hilo. Tiene que ser el mismo número y la misma conversación, o el paciente recibe dos voces de Welli.
+ Qué pasa con las clínicas. Cuando el freno es el aliado y no el paciente, no hay a quién escalar hoy.
+ Fuentes: welli-growth.rescate.lista_dia , rescate.gestion y rescate.seguimiento · modelo en modelo_recuperacion.json · señal de conversación vía API de hilos, consultada el 27/08 a las 11:30.
+ Las llamadas que se cuentan acá son las que Kevin registra en «Mi día». Wolkvox no exporta a BigQuery, así que no hay log de marcación real — duración, intentos ni horas exactas.

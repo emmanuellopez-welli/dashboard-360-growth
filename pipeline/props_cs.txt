@@ -1,0 +1,168 @@
+497 propiedades en el objeto Sedes
+
+nombre interno                                 etiqueta                                       tipo
+bq_dias_a_exitoso                              Días de CS a Exitoso                           number/number
+bq_notificado_farmer_at                        Fecha notificación Farmer nueva sede           date/date
+cambio_pipeline                                cambio pipeline                                enumeration/select
+capacitacion_cs                                Capacitación CS                                enumeration/booleancheckbox
+clinica_de_ventas_cs                           Clinica de ventas CS                           enumeration/booleancheckbox
+cs_apps_total_bq                               Apps totales (BQ)                              number/number
+cs_dias_a_1app                                 Días entrada→1ª app                            number/number
+cs_dias_a_exitosa_calculado                    Días a exitosa (calc)                          number/number
+cs_dias_a_exitosa_real                         Días entrada→exitosa                           number/number
+cs_dias_en_pipeline                            Días en pipeline CS                            number/number
+cs_estado_funnel                               Estado funnel                                  enumeration/select
+cs_exitosa_real                                Exitosa real (3 apps o 1 firma)                enumeration/booleancheckbox
+cs_fecha_entrada                               Entrada pipeline CS (1ª vez)                   date/date
+cs_fecha_exitosa_real                          Fecha exitosa real                             date/date
+cs_firmas_total_bq                             Firmas/desembolsos (BQ)                        number/number
+cs_gestion_muerto                              [CS] Gestion muerto                            bool/booleancheckbox
+cs_hizo_1app                                   Hizo ≥1 app                                    enumeration/booleancheckbox
+cs_score_alterno                               CS Score alterno                               number/number
+customer_success                               Customer success                               enumeration/select
+deal_pipeline_fecha_cierre_ganado              Deal pipeline [fecha cierre ganado]            datetime/date
+dias_a_exitoso                                 dias a exitoso                                 number/calculation_equation
+dias_a_reactivacion_cs                         dias a reactivación CS                         number/calculation_equation
+dias_customer_success                          dias customer success                          number/calculation_equation
+farmer                                         Farmer                                         enumeration/select
+fecha_a_exitoso_cs                             fecha a exitoso cs                             date/date
+fecha_entrada_farmer                           Fecha 1ª entrada a Farmer                      date/date
+fecha_entrada_pipeline_actual                  Fecha entrada pipeline actual                  date/date
+fecha_graduacion_farmer                        Fecha graduación a Farmer                      date/date
+fecha_inicio_customer_success                  Fecha inicio customer success                  date/date
+fecha_salida_auto                              Fecha última salida de Autogestionados         date/date
+fecha_salida_cs                                Fecha salida CS                                date/date
+fecha_salida_pipeline_cs                       Fecha salida pipeline CS                       date/date
+hs_current_customer                            Current Customer                               enumeration/select
+hs_pipeline                                    Sede pipeline                                  enumeration/select
+hs_pipeline_stage                              Sede pipeline stage                            enumeration/select
+hs_v2_cumulative_time_in_1183601832            Cumulative time in "Etapa abierta (Pipeline s  number/number
+hs_v2_cumulative_time_in_1183601833            Cumulative time in "Etapa cerrada (Pipeline s  number/number
+hs_v2_cumulative_time_in_1276997485            Cumulative time in "Contacto no iniciado (Pip  number/number
+hs_v2_cumulative_time_in_1278172831            Cumulative time in "Exitoso (Pipeline de Cust  number/number
+hs_v2_cumulative_time_in_1281948992            Cumulative time in "Deal sin capacitacion (Pi  number/number
+hs_v2_cumulative_time_in_1295213839            Cumulative time in "Primera capacitacion (Pip  number/number
+hs_v2_cumulative_time_in_1295214594            Cumulative time in "Primer contacto customer   number/number
+hs_v2_cumulative_time_in_1297791825            Cumulative time in "Inicio activo (Pipeline d  number/number
+hs_v2_cumulative_time_in_1313412007            Cumulative time in "Capacitado (Pipeline de C  number/number
+hs_v2_cumulative_time_in_1325067869            Cumulative time in "Nuevo (Farmer - Nuevos)"   number/number
+hs_v2_cumulative_time_in_1325067870            Cumulative time in "Capacitado (Farmer - Nuev  number/number
+hs_v2_cumulative_time_in_1337391185            Cumulative time in "Capacitación Agendada (Fa  number/number
+hs_v2_cumulative_time_in_1355587080            Cumulative time in "Exitoso (Capacitación mue  number/number
+hs_v2_cumulative_time_in_1367676224            Cumulative time in "Pediatría (Farmer - Nuevo  number/number
+hs_v2_cumulative_time_in_1367676225            Cumulative time in "Inmunidad Total (Farmer -  number/number
+hs_v2_cumulative_time_in_1367676226            Cumulative time in "Saludable (Farmer - Nuevo  number/number
+hs_v2_cumulative_time_in_1367676227            Cumulative time in "Sala de Urgencias (Farmer  number/number
+hs_v2_cumulative_time_in_1367676228            Cumulative time in "Reanimación (Farmer - Nue  number/number
+hs_v2_cumulative_time_in_1367676229            Cumulative time in "UCI (Farmer - Nuevos)"     number/number
+hs_v2_cumulative_time_in_1367676230            Cumulative time in "Morgue (Farmer - Nuevos)"  number/number
+hs_v2_date_entered_1183601832                  Date entered "Etapa abierta (Pipeline sedes)"  datetime/date
+hs_v2_date_entered_1183601833                  Date entered "Etapa cerrada (Pipeline sedes)"  datetime/date
+hs_v2_date_entered_1276997485                  Date entered "Contacto no iniciado (Pipeline   datetime/date
+hs_v2_date_entered_1278172831                  Date entered "Exitoso (Pipeline de Customer S  datetime/date
+hs_v2_date_entered_1281948992                  Date entered "Deal sin capacitacion (Pipeline  datetime/date
+hs_v2_date_entered_1295213839                  Date entered "Primera capacitacion (Pipeline   datetime/date
+hs_v2_date_entered_1295214594                  Date entered "Primer contacto customer succes  datetime/date
+hs_v2_date_entered_1297791825                  Date entered "Inicio activo (Pipeline de Farm  datetime/date
+hs_v2_date_entered_1313412007                  Date entered "Capacitado (Pipeline de Custome  datetime/date
+hs_v2_date_entered_1325067869                  Date entered "Nuevo (Farmer - Nuevos)"         datetime/date
+hs_v2_date_entered_1325067870                  Date entered "Capacitado (Farmer - Nuevos)"    datetime/date
+hs_v2_date_entered_1337391185                  Date entered "Capacitación Agendada (Farmer -  datetime/date
+hs_v2_date_entered_1355587080                  Date entered "Exitoso (Capacitación muertos)"  datetime/date
+hs_v2_date_entered_1367676224                  Date entered "Pediatría (Farmer - Nuevos)"     datetime/date
+hs_v2_date_entered_1367676225                  Date entered "Inmunidad Total (Farmer - Nuevo  datetime/date
+hs_v2_date_entered_1367676226                  Date entered "Saludable (Farmer - Nuevos)"     datetime/date
+hs_v2_date_entered_1367676227                  Date entered "Sala de Urgencias (Farmer - Nue  datetime/date
+hs_v2_date_entered_1367676228                  Date entered "Reanimación (Farmer - Nuevos)"   datetime/date
+hs_v2_date_entered_1367676229                  Date entered "UCI (Farmer - Nuevos)"           datetime/date
+hs_v2_date_entered_1367676230                  Date entered "Morgue (Farmer - Nuevos)"        datetime/date
+hs_v2_date_exited_1183601832                   Date exited "Etapa abierta (Pipeline sedes)"   datetime/date
+hs_v2_date_exited_1183601833                   Date exited "Etapa cerrada (Pipeline sedes)"   datetime/date
+hs_v2_date_exited_1276997485                   Date exited "Contacto no iniciado (Pipeline d  datetime/date
+hs_v2_date_exited_1278172831                   Date exited "Exitoso (Pipeline de Customer Su  datetime/date
+hs_v2_date_exited_1281948992                   Date exited "Deal sin capacitacion (Pipeline   datetime/date
+hs_v2_date_exited_1295213839                   Date exited "Primera capacitacion (Pipeline d  datetime/date
+hs_v2_date_exited_1295214594                   Date exited "Primer contacto customer success  datetime/date
+hs_v2_date_exited_1297791825                   Date exited "Inicio activo (Pipeline de Farme  datetime/date
+hs_v2_date_exited_1306293293                   Date exited "Amarillo (Autogestionados)"       datetime/date
+hs_v2_date_exited_1306293294                   Date exited "Verde (Autogestionados)"          datetime/date
+hs_v2_date_exited_1306293372                   Date exited "Rojo (Autogestionados)"           datetime/date
+hs_v2_date_exited_1313412007                   Date exited "Capacitado (Pipeline de Customer  datetime/date
+hs_v2_date_exited_1325067869                   Date exited "Nuevo (Farmer - Nuevos)"          datetime/date
+hs_v2_date_exited_1325067870                   Date exited "Capacitado (Farmer - Nuevos)"     datetime/date
+hs_v2_date_exited_1327734139                   Date exited "Deshabilitado (Aliados_deshabili  datetime/date
+hs_v2_date_exited_1337391185                   Date exited "Capacitación Agendada (Farmer -   datetime/date
+hs_v2_date_exited_1349994150                   Date exited "Descartado (Muertos)"             datetime/date
+hs_v2_date_exited_1355587080                   Date exited "Exitoso (Capacitación muertos)"   datetime/date
+hs_v2_date_exited_1355587946                   Date exited "Reonboarding agendado (Capacitac  datetime/date
+hs_v2_date_exited_1355587947                   Date exited "Capacitado (Capacitación muertos  datetime/date
+hs_v2_date_exited_1355601445                   Date exited "Activo  (Capacitación muertos)"   datetime/date
+hs_v2_date_exited_1367676224                   Date exited "Pediatría (Farmer - Nuevos)"      datetime/date
+hs_v2_date_exited_1367676225                   Date exited "Inmunidad Total (Farmer - Nuevos  datetime/date
+hs_v2_date_exited_1367676226                   Date exited "Saludable (Farmer - Nuevos)"      datetime/date
+hs_v2_date_exited_1367676227                   Date exited "Sala de Urgencias (Farmer - Nuev  datetime/date
+hs_v2_date_exited_1367676228                   Date exited "Reanimación (Farmer - Nuevos)"    datetime/date
+hs_v2_date_exited_1367676229                   Date exited "UCI (Farmer - Nuevos)"            datetime/date
+hs_v2_date_exited_1367676230                   Date exited "Morgue (Farmer - Nuevos)"         datetime/date
+hs_v2_latest_time_in_1183601832                Latest time in "Etapa abierta (Pipeline sedes  number/number
+hs_v2_latest_time_in_1183601833                Latest time in "Etapa cerrada (Pipeline sedes  number/number
+hs_v2_latest_time_in_1276997485                Latest time in "Contacto no iniciado (Pipelin  number/number
+hs_v2_latest_time_in_1278172831                Latest time in "Exitoso (Pipeline de Customer  number/number
+hs_v2_latest_time_in_1281948992                Latest time in "Deal sin capacitacion (Pipeli  number/number
+hs_v2_latest_time_in_1295213839                Latest time in "Primera capacitacion (Pipelin  number/number
+hs_v2_latest_time_in_1295214594                Latest time in "Primer contacto customer succ  number/number
+hs_v2_latest_time_in_1297791825                Latest time in "Inicio activo (Pipeline de Fa  number/number
+hs_v2_latest_time_in_1313412007                Latest time in "Capacitado (Pipeline de Custo  number/number
+hs_v2_latest_time_in_1325067869                Latest time in "Nuevo (Farmer - Nuevos)"       number/number
+hs_v2_latest_time_in_1325067870                Latest time in "Capacitado (Farmer - Nuevos)"  number/number
+hs_v2_latest_time_in_1337391185                Latest time in "Capacitación Agendada (Farmer  number/number
+hs_v2_latest_time_in_1355587080                Latest time in "Exitoso (Capacitación muertos  number/number
+hs_v2_latest_time_in_1367676224                Latest time in "Pediatría (Farmer - Nuevos)"   number/number
+hs_v2_latest_time_in_1367676225                Latest time in "Inmunidad Total (Farmer - Nue  number/number
+hs_v2_latest_time_in_1367676226                Latest time in "Saludable (Farmer - Nuevos)"   number/number
+hs_v2_latest_time_in_1367676227                Latest time in "Sala de Urgencias (Farmer - N  number/number
+hs_v2_latest_time_in_1367676228                Latest time in "Reanimación (Farmer - Nuevos)  number/number
+hs_v2_latest_time_in_1367676229                Latest time in "UCI (Farmer - Nuevos)"         number/number
+hs_v2_latest_time_in_1367676230                Latest time in "Morgue (Farmer - Nuevos)"      number/number
+link_de_whatsapp_del_farmer                    Link de whatsapp del farmer                    string/text
+lista_para_escalar_a_cs                        Lista para escalar a CS (desde Muertos)        bool/booleancheckbox
+motivo_no_exitoso                              Motivo no exitoso                              enumeration/select
+rango_dias_a_exitoso                           rango dias a exitoso                           string/calculation_equation
+rangos_fecha_exitoso_cs                        Rangos fecha exitoso CS                        number/calculation_equation
+rating_cs                                      Rating CS                                      number/calculation_rollup
+resucitado_por_cs                              Resucitado por CS                              enumeration/booleancheckbox
+tarea_farmer                                   tarea farmer                                   enumeration/booleancheckbox
+whatsapp_farmer                                whatsapp farmer                                string/text
+
+--- solo las de tipo fecha con "sal" o "cs" ---
+bq_notificado_farmer_at                        Fecha notificación Farmer nueva sede           date
+cs_fecha_entrada                               Entrada pipeline CS (1ª vez)                   date
+cs_fecha_exitosa_real                          Fecha exitosa real                             date
+fecha_a_exitoso_cs                             fecha a exitoso cs                             date
+fecha_entrada_farmer                           Fecha 1ª entrada a Farmer                      date
+fecha_graduacion_farmer                        Fecha graduación a Farmer                      date
+fecha_salida_auto                              Fecha última salida de Autogestionados         date
+fecha_salida_cs                                Fecha salida CS                                date
+fecha_salida_pipeline_cs                       Fecha salida pipeline CS                       date
+hs_v2_date_entered_1297791825                  Date entered "Inicio activo (Pipeline de Farm  datetime
+hs_v2_date_entered_1325067869                  Date entered "Nuevo (Farmer - Nuevos)"         datetime
+hs_v2_date_entered_1325067870                  Date entered "Capacitado (Farmer - Nuevos)"    datetime
+hs_v2_date_entered_1337391185                  Date entered "Capacitación Agendada (Farmer -  datetime
+hs_v2_date_entered_1367676224                  Date entered "Pediatría (Farmer - Nuevos)"     datetime
+hs_v2_date_entered_1367676225                  Date entered "Inmunidad Total (Farmer - Nuevo  datetime
+hs_v2_date_entered_1367676226                  Date entered "Saludable (Farmer - Nuevos)"     datetime
+hs_v2_date_entered_1367676227                  Date entered "Sala de Urgencias (Farmer - Nue  datetime
+hs_v2_date_entered_1367676228                  Date entered "Reanimación (Farmer - Nuevos)"   datetime
+hs_v2_date_entered_1367676229                  Date entered "UCI (Farmer - Nuevos)"           datetime
+hs_v2_date_entered_1367676230                  Date entered "Morgue (Farmer - Nuevos)"        datetime
+hs_v2_date_exited_1297791825                   Date exited "Inicio activo (Pipeline de Farme  datetime
+hs_v2_date_exited_1325067869                   Date exited "Nuevo (Farmer - Nuevos)"          datetime
+hs_v2_date_exited_1325067870                   Date exited "Capacitado (Farmer - Nuevos)"     datetime
+hs_v2_date_exited_1337391185                   Date exited "Capacitación Agendada (Farmer -   datetime
+hs_v2_date_exited_1367676224                   Date exited "Pediatría (Farmer - Nuevos)"      datetime
+hs_v2_date_exited_1367676225                   Date exited "Inmunidad Total (Farmer - Nuevos  datetime
+hs_v2_date_exited_1367676226                   Date exited "Saludable (Farmer - Nuevos)"      datetime
+hs_v2_date_exited_1367676227                   Date exited "Sala de Urgencias (Farmer - Nuev  datetime
+hs_v2_date_exited_1367676228                   Date exited "Reanimación (Farmer - Nuevos)"    datetime
+hs_v2_date_exited_1367676229                   Date exited "UCI (Farmer - Nuevos)"            datetime
+hs_v2_date_exited_1367676230                   Date exited "Morgue (Farmer - Nuevos)"         datetime

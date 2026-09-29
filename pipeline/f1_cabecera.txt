@@ -1,0 +1,6 @@
+    '<h1>¿Estamos generando suficiente demanda, y a qué costo?</h1>' +
+    '<p class="lead">La cadena completa: metemos plata en pauta, entran clínicas al ' +
+    'pipeline, y esas clínicas generan solicitudes de crédito que terminan en desembolsos. ' +
+    'Tres eslabones, en ese orden.</p>' +
+    '</div>';
+  h += cintaOrigen();

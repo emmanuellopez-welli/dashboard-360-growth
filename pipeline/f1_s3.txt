@@ -1,0 +1,56 @@
+  // --- 3. Las clínicas que entraron y de qué calidad ------------------
+  var cos = f.cosechas || [];
+  var comp = f.composicion || {};
+  h += '<h2 class="sec">3 · Las clínicas que entraron y de qué calidad</h2>' +
+    '<p class="sec-sub">la clasificación de aliado decide si la sede recibe gestión ' +
+    'dedicada</p>';
+  /* Dona en vez de barras: son cuatro clases que suman un todo con
+     significado (el universo elegido), y el total va al centro. La clase A
+     no viene como columna en HubSpot — es la resta del universo menos AA,
+     AAA y las que no tienen clasificación. */
+  /* Dos donas del MISMO mes que la tarjeta de arriba: las que entraron y,
+     al lado, las que trajo marketing. Puestas juntas y con las mismas
+     categorias, se lee de un golpe si marketing trae mejor o peor calidad
+     que el resto — que es la pregunta del frente. */
+  var COLCL = { 'AAA': 'var(--s3)', 'AA': 'var(--s2)', 'A': 'var(--s1)',
+                'Sin clasificar': 'var(--borde-fuerte)' };
+  function pintarTorta(id, datos, n, sub) {
+    pintar(id, function (el) {
+      chTorta(el, (datos || []).map(function (r) {
+        return { etiqueta: r.clase, y: r.n, color: COLCL[r.clase] || 'var(--s4)' };
+      }), { alto: 220, formato: fNum, centroSub: sub,
+        detalle: function (d) {
+          return [{ nombre: 'Sedes', valor: fNum(d.y) },
+                  { nombre: 'del total del mes', valor: fPct(n ? Math.round((d.y / n) * 1000) / 10 : 0) }];
+        } });
+    });
+  }
+  if (comp) {
+    /* La dona de marketing usa la mitad izquierda del SVG, asi que el
+       desglose por canal va en la mitad derecha del mismo panel: es la
+       pregunta que sigue naturalmente a "¿cuantas trajo marketing?". */
+    var canales = (comp.mkt.canales || []).length
+      ? '<table class="t" style="margin-top:4px"><thead><tr>' +
+        '<th style="text-align:left">Canal</th><th>Sedes</th><th>%</th>' +
+        '</tr></thead><tbody>' +
+        comp.mkt.canales.map(function (r) {
+          return '<tr><td class="txt">' + esc(r.canal) + '</td><td>' + fNum(r.n) +
+            '</td><td>' + fPct(r.pct) + '</td></tr>';
+        }).join('') + '</tbody></table>'
+      : '';
+    h += '<div class="grid2">' +
+      panel('Las ' + fNum(comp.todas.n) + ' que entraron en ' + esc(comp.mes),
+        'todos los orígenes, por clasificación de aliado', '', 'gF1Torta') +
+      '<div class="panel">' +
+        '<h3>Las ' + fNum(comp.mkt.n) + ' que trajo marketing</h3>' +
+        '<p class="sub">' + fPct(comp.mkt.pct) + ' del mes · por clasificación y por canal</p>' +
+        '<div class="torta-fila">' +
+          '<div class="grafica" id="gF1TortaMkt"></div>' +
+          '<div class="torta-tabla">' + canales + '</div>' +
+        '</div>' +
+      '</div>' +
+      '</div>';
+    pintarTorta('gF1Torta', comp.todas.filas, comp.todas.n, 'sedes nuevas de ' + comp.mes);
+    pintarTorta('gF1TortaMkt', comp.mkt.filas, comp.mkt.n, 'de marketing');
+  }
+  // --- Cohortes de deals de HubSpot ---------------------------------

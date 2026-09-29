@@ -1,0 +1,2 @@
+[14944:43152:0904/143259.701:INFO:components\enterprise\browser\controller\chrome_browser_cloud_management_controller.cc:241] No machine level policy manager exists.
+[14944:43152:0904/143307.644:ERROR:chrome\browser\web_applications\externally_managed_app_manager.cc:680] https://mail.google.com/mail/installwebapp?usp=chrome_default from install source 1 failed to install with reason 21

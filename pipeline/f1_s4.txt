@@ -1,0 +1,21 @@
+  /* El equivalente de la tabla de cosechas pero un paso ANTES: en el
+     pipeline comercial, cuando todavia es un negocio y no una sede. Dice
+     cuantos deals entraron cada mes y cuantos se fueron cerrando ganados. */
+  var dc = f.dealsCohorte || {};
+  if (dc.hay && (dc.filas || []).length) {
+    h += '<h2 class="sec">4 · Los deals que entraron, ¿se cierran?</h2>' +
+      '<p class="sec-sub">negocios de HubSpot por mes de creación y cuántos llegaron a ' +
+      'cierre ganado · ' + esc(dc.universo || '') +
+      (dc.excluidos ? ' · se excluyen los cerrados perdidos por ' +
+        esc(dc.excluidos) : '') + '</p>';
+    h += tablaCohorte(dc.filas, dc.offsets, fNum,
+      'Deals ganados · acumulado',
+      'De los deals que entraron ese mes, cuántos ya están en cierre ganado al mes N. ' +
+      'Solo sube.',
+      'acum', '% del mes que ya cerró ganado', 'Deals', true);
+  }
+
+  if ((em.kpis || []).length) {
+    // El titulo no lleva el nombre del origen: la etiqueta viene en
+    // mayusculas del catalogo de HubSpot ("que trajo EVENTO") y se lee mal.
+    // El universo va en el subtitulo, que ya es explicito.

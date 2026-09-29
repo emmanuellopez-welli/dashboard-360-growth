@@ -1,0 +1,50 @@
+    h += '<h2 class="sec">5 · ¿En qué termina la demanda que entró?</h2>' +
+      '<p class="sec-sub">' + (em.cohorte
+        ? 'doble corte: las ' + fNum(em.sedes) + ' sedes que entraron en el ' +
+          'período (' + esc(em.mes) + ') y los créditos que radicaron en el ' +
+          'período · ' + esc(em.universo || '')
+        : 'de los créditos radicados en el período · ' + esc(em.universo || '')) +
+      '</p>';
+    h += filaKPIs(em.kpis);
+
+    // Sin esta linea la seccion se lee como el total del mes. No lo es: es
+    // solo la cosecha nueva, y pesa ~1%. Decirlo aqui evita el malentendido
+    // y de paso es el mejor argumento para el frente 2.
+    if (em.contexto) {
+      h += '<div class="lectura">Es la cosecha nueva, no el mes completo: ' +
+        'estas ' + fNum(em.sedes) + ' sedes pusieron ' + fPct(em.contexto.pctMonto) +
+        ' de la plata del período (' + fCopC(em.contexto.monto) + ' en total, ' +
+        fNum(em.contexto.sol) + ' solicitudes). Los otros ' +
+        fCopC(em.contexto.montoResto) + ' los pusieron sedes que entraron en meses ' +
+        'anteriores — por eso el negocio se sostiene en el stock, no en la ' +
+        'adquisición del mes.</div>';
+    }
+
+    if (em.hay) {
+      // El embudo y el monto diario no aportaban: el embudo repetia los tres
+      // numeros que ya estan en las tarjetas, y el monto diario de una
+      // cosecha nueva son 13 barras dispersas sobre 31 dias.
+      // Share de la plata por origen. Los origenes van aunque pongan cero: un
+      // origen que trajo sedes y no puso plata es informacion.
+      if ((em.canales || []).length) {
+        h += '<div style="margin-top:14px">' +
+          panel('¿De qué origen salió esa plata?',
+            fCopC(em.montoCanales) + ' de la cosecha del período, repartidos por ' +
+            'el origen de la sede · sede lograda = sede que firmó al menos un ' +
+            'crédito',
+            tabla([
+              { t: 'Origen', k: 'canal', f: 'txt', txt: true },
+              { t: 'Solicitudes', k: 'sol' },
+              { t: 'Aprobados', k: 'apr' },
+              { t: 'Desembolsos', k: 'des' },
+              { t: 'Conv', k: 'conv', f: 'pct' },
+              { t: 'Sedes logradas', k: 'sedes' },
+              { t: 'Plata', k: 'monto', f: 'cop' },
+              { t: 'Plata/sede', k: 'porSede', f: 'cop' },
+              { t: 'Ticket', k: 'ticket', f: 'cop' },
+              { t: '% de la plata', k: 'pct', f: 'pct' }
+            ], em.canales)) +
+          '</div>';
+      }
+    }
+  }
