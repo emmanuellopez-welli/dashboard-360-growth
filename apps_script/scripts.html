@@ -3749,7 +3749,8 @@ function vistaF8() {
     'las dos series se fechan por el día en que el paciente aplicó, así que ' +
     '“desembolsos” es el subconjunto de esas mismas solicitudes que convirtió — ' +
     'siempre va por debajo, nunca al lado',
-    '', 'gF8Serie');
+    leyenda([{ nombre: 'Solicitudes', color: 'var(--s1)' },
+             { nombre: 'Desembolsos', color: 'var(--s2)' }]), 'gF8Serie');
   pintar('gF8Serie', function (el) {
     chGrupos(el,
       serie.map(function (d) { return d.x; }),
@@ -3776,10 +3777,18 @@ function vistaF8() {
       'por <b>pre-check</b>, así que ese medio es la huella de un envío: cuando ' +
       'sale una campaña, pre-check se dispara y el resto no se mueve</p>';
 
+    // La leyenda va SIEMPRE: sin ella las dos series solo se distinguen por
+    // color y hay que pasar el mouse por encima para saber cuál es cuál
+    // (lo señaló Emmanuel el 29-sep-2026). `panel()` la recibe como cuerpo.
+    var leyAtrib = leyenda([
+      { nombre: 'pre-check — por donde entran las campañas', color: 'var(--s1)' },
+      { nombre: 'otros medios', color: 'var(--s3)' }
+    ]);
+
     h += panel('Solicitudes por día, según de dónde vinieron',
       'una sola escala, las dos series son solicitudes · un pico de pre-check ' +
       'sobre un fondo plano es la señal de que una campaña movió la aguja',
-      '', 'gF8Atrib');
+      leyAtrib, 'gF8Atrib');
     pintar('gF8Atrib', function (el) {
       chGrupos(el,
         atrib.map(function (d) { return d.x; }),
@@ -3799,7 +3808,7 @@ function vistaF8() {
         'se pinta la jornada completa aunque haya horas vacías: un racimo se ' +
         'lee como racimo solo si al lado se ven las horas sin nada · hora local ' +
         'de Colombia',
-        '', 'gF8Horas');
+        leyAtrib, 'gF8Horas');
       pintar('gF8Horas', function (el) {
         chGrupos(el,
           f.horas.map(function (d) { return d.x; }),

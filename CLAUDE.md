@@ -2475,6 +2475,24 @@ falló es apagar la alarma; acá se rastreó la fórmula, se verificó que el
 numerador estaba en línea con otros días, y se dejó el tope cuidando lo que
 sí sería un error (un `enM` cercano a cero disparando el ratio a miles).
 
+**Leyenda: `chGrupos` NO la dibuja sola.** Los tres gráficos de F8 salieron
+publicados sin leyenda porque `panel(titulo, sub, CUERPO, idGrafico)` la
+recibe como TERCER parámetro y se le pasó `''`. Emmanuel lo señaló de
+inmediato: *"veo las barras pero a menos que me pare encima no me doy
+cuenta que eso es welli check"* — con dos series distinguidas solo por
+color, el tooltip es la única forma de saber cuál es cuál, y un tooltip no
+sirve cuando alguien mira la pantalla compartida en una reunión.
+
+Se corrigió pasando `leyenda([{nombre, color}, ...])` como cuerpo, que es
+el patrón que ya usaban F1 y F5. **Y el rótulo lleva la explicación, no
+solo el nombre técnico**: dice "pre-check — por donde entran las campañas",
+no "pre-check" a secas, porque ese gráfico lo va a ver gente que no conoce
+el flujo.
+
+Regla: cualquier gráfico de MÁS DE UNA SERIE necesita `leyenda()` en el
+cuerpo del panel. Si las series se distinguen solo por color, está
+incompleto.
+
 **Nota de proceso**: `jsdom_f8.js` empezó a fallar los 10 checks de
 contenido con `VISTA=f1`. No era el bug de `VISTAS_VALIDAS` otra vez — eran
 **los tiempos de espera**: el artefacto creció a 14,2 MB y el clic del nav
