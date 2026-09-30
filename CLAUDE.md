@@ -2538,3 +2538,65 @@ Sankey, asi que el check fallaba con el borrado ya hecho. Se cambio por
 se borro. **Un negativo de contenido tiene que anclarse a algo que solo exista
 en el panel borrado**, no a una frase generica que el tablero repite en otros
 lados.
+
+## 57 · F2 Profundizacion: "nunca han hecho nada" cambiado por dos mapas de Autogestionados (30-sep-2026)
+
+Pedido explicito: borrar el mapa 8 ("Sedes que nunca han hecho nada",
+seccion 24) y reemplazarlo por dos replicas de "Sedes exitosas" (2) y
+"Sedes que desembolsan · acumulado" (3), **restringidas a las sedes que HOY
+estan en el pipeline Autogestionados de HubSpot**.
+
+**Es una foto del pipeline ACTUAL, no de la cosecha de entrada.** Una sede
+puede salir de estos dos mapas nuevos de un dia para otro si se mueve a
+Farmer o se deshabilita — aunque ya haya sido exitosa. Se declara en el
+`sub` de cada panel para que no se lea como un bug si una cosecha "pierde"
+sedes de esta tabla en particular sin que las otras (2 y 3) cambien.
+
+**Implementacion — se reusa la MISMA agrupacion por cosecha, solo se angosta
+la poblacion.** `armarF2_` ya agrupaba `cos`/`cosB` (cosecha de entrada →
+lista de `id_internal`) antes de correr los MEDIR; se agrego
+`idsAutoget_` (set de `id_internal` con `pipeline === 'Autogestionados'`,
+leido de `U.base`, que ya trae el campo `pipeline` crudo de la hoja SEDES)
+y `filtrarCosechaPorIds_()`, que produce `cosAuto`/`cosBAuto` filtrando
+`ids` de cada cosecha contra ese set. Los dos mapas nuevos
+(`exitosas_auto` orden 8, `desembolsos_auto` orden 9) corren los MISMOS
+`MEDIR.exitosas`/`MEDIR.desembolsos` de siempre, pero sobre `cosAuto` en
+vez de `cos` — no hizo falta un MEDIR nuevo ni un pull nuevo, `SEDES.pipeline`
+ya viene embebida en el artefacto desde antes.
+
+**Limpieza de codigo muerto (regla 33)**: `nuncaVivas_()` se borro entera
+(su unico consumidor era el mapa borrado) junto con el
+`if (B) B.nuncavivas = ...` del comparador. En su lugar,
+`if (B) { B.exitosas_auto = ...; B.desembolsos_auto = ...; }` para que el
+comparador de grupos (marketing/comercial) tambien traiga los dos mapas
+nuevos — el loop generico de `f.mapas.forEach` que cuelga `filasB`/
+`promedioB` por `m.id` los recoge solo con que existan en `B`.
+
+**QA — recalculo genuinamente independiente, no autoconsistencia (regla 4).**
+El chequeo viejo de `nuncavivas` comparaba dos salidas de Code.gs entre si
+(activas vs. su complemento) — no habria servido para el pedido de hoy. El
+nuevo (`chequearF2` ahora recibe `orig`/`rol`) llama al primitivo real
+`universoSedes_(orig, rol)` (regla 3: el punto unico de filtro, reusarlo es
+correcto — no se esta probando el filtro, se esta probando lo que armarF2_
+hace CON el filtro), rearma la cosecha por sede con una implementacion
+propia de `cosechaDe_` (no puede llamar a la de Code.gs porque es local a
+`armarF2_`, no global) y vuelve a medir sobre `SEDE_ESTADO_MES` desde cero.
+Verifica: `cruzables` de cada cosecha == el conteo independiente, cada
+celda == el conteo independiente mes a mes, y la plata de `desembolsos_auto`
+== la suma independiente. 286.131 aserciones (subio de 274.521 por los
+checks nuevos), 0 fallos, en las 120 combinaciones de fecha×origen×rol.
+
+**Verificacion de contenido (regla 16), con el aprendizaje de la seccion 56
+ya aplicado**: se peino con `.panel h3` los titulos (NO `body.textContent`,
+que incluye el codigo fuente del `<script>` embebido — un primer intento
+con `textContent` dio un falso positivo porque el propio comentario de este
+cambio, dentro de Code.gs, menciona el nombre del panel borrado) y se
+confirmo que las tablas de los dos paneles nuevos pintan celdas de calor
+reales (`td.hm`), no que el panel exista vacio.
+
+**Numeros al 30-sep-2026** (todo 2026, sin filtro): 6 cosechas con al menos
+una sede en Autogestionados hoy; la mas madura (enero-2026) tiene 33 sedes
+cruzables, de las cuales 28 (85%) ya son exitosas y 13 (39%) ya
+desembolsaron.
+
+Publicado como version 111, misma URL de siempre.

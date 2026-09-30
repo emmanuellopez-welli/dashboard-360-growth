@@ -288,7 +288,7 @@ function chequearCohorteAcum(ctx, nombre, filas) {
   });
 }
 
-function chequearF2(ctx, d) {
+function chequearF2(ctx, d, orig, rol) {
   const f = d.f2 || {};
   (f.mapas || []).forEach(m => {
     // 24-sep-2026: 'desembolsos'/'desembolsos_mes' ahora tienen pctCelda Y
@@ -303,16 +303,14 @@ function chequearF2(ctx, d) {
         if (c === null || c === undefined) return;
         num(ctx, c, 'f2[' + m.id + '][' + r.cosecha + '].celdas[' + k + ']', { min: 0 });
         // los mapas de conteo son acumulados: no pueden bajar ni pasar de n
-        // 'nuncavivas' es el COMPLEMENTO de 'activas' (cruzables - activas):
-        // por diseno BAJA con el tiempo, igual que inactivas/muertas son
-        // foto puntual y no acumulado -- pero SI sigue teniendo que
-        // respetar el techo (nunca mas que su base).
+        // inactivas/muertas son foto puntual, no acumulado.
         // 24-sep-2026, segunda vuelta: 'desembolsos_mes' ya NO es puntual --
         // ahora comparte LITERALMENTE la misma columna de sedes que el
         // acumulado 'desembolsos' (pedido explicito: que los dos mapas se
         // hablen en sedes), asi que tiene que pasar el mismo chequeo de
-        // monotonia que su acumulado.
-        const puntual = m.id === 'inactivas' || m.id === 'muertas' || m.id === 'nuncavivas';
+        // monotonia que su acumulado. 'exitosas_auto'/'desembolsos_auto'
+        // son acumulados igual que sus originales, mismo chequeo.
+        const puntual = m.id === 'inactivas' || m.id === 'muertas';
         if (esConteo && !puntual) {
           checks++;
           if (c < prev) {
@@ -367,30 +365,92 @@ function chequearF2(ctx, d) {
     });
   }
 
-  // 'nuncavivas' es un COMPLEMENTO de 'activas' (recalculo independiente,
-  // no autoconsistencia con si mismo: se recalcula la suma aca, no se
-  // confia en que Code.gs la construyo bien solo porque no truena).
-  const mActivas = (f.mapas || []).find(m => m.id === 'activas');
-  const mNunca = (f.mapas || []).find(m => m.id === 'nuncavivas');
-  if (mActivas && mNunca) {
-    const porCosecha = {};
-    (mActivas.filas || []).forEach(r => { porCosecha[r.cosecha] = r; });
-    (mNunca.filas || []).forEach(rN => {
-      const rA = porCosecha[rN.cosecha];
-      if (!rA) { fail('f2.nuncavivas', 'sin fila de activas para ' + rN.cosecha); return; }
-      checks++;
-      if (rA.cruzables !== rN.cruzables) {
-        fail('f2.nuncavivas[' + rN.cosecha + ']', 'cruzables no coincide con activas',
-          rN.cruzables + ' vs ' + rA.cruzables);
-      }
-      rN.celdas.forEach((c, k) => {
-        if (c === null || c === undefined) return;
+  // 'exitosas_auto'/'desembolsos_auto' (30-sep-2026, reemplazan a
+  // 'nuncavivas'): recalculo independiente DESDE CRUDO, no autoconsistencia
+  // -- se rearma la poblacion (sedes hoy en pipeline Autogestionados,
+  // agrupadas por su cosecha de entrada) con la misma llamada al primitivo
+  // de filtro (universoSedes_, el punto unico de la regla 3) y se vuelve a
+  // medir sobre SEDE_ESTADO_MES desde cero, sin tocar armarF2_ ni su
+  // idsAutoget_ interno (que es local a esa funcion y no se puede llamar
+  // desde aca de todas formas).
+  const mExAuto = (f.mapas || []).find(m => m.id === 'exitosas_auto');
+  const mDesAuto = (f.mapas || []).find(m => m.id === 'desembolsos_auto');
+  if (mExAuto || mDesAuto) {
+    const U = universoSedes_(orig, rol);
+    const vincDiaDe = U.vincDiaDe || {};
+    function cosechaDeQA_(s) {
+      const iid = String(s.id_internal || '').trim();
+      const fc = String(s.fecha_creacion || '').substring(0, 10);
+      const fv = String(vincDiaDe[iid] || '').substring(0, 10);
+      if (fc && fv) return (fc < fv ? fc : fv).substring(0, 7);
+      return (fc || fv).substring(0, 7);
+    }
+    const porCosechaAuto = {};   // cosecha -> [id_internal] (Autogestionados)
+    (U.filas || []).forEach(s => {
+      const iid = String(s.id_internal || '').trim();
+      if (!iid) return;
+      if (String(s.pipeline || '').trim() !== 'Autogestionados') return;
+      const c = cosechaDeQA_(s);
+      if (!/^\d{4}-\d{2}$/.test(c)) return;
+      if (esCargaInicial_(c)) return;
+      if (c < COSECHA_PISO_F2) return;
+      (porCosechaAuto[c] = porCosechaAuto[c] || []).push(iid);
+    });
+
+    const em = leerHoja_('SEDE_ESTADO_MES');
+    const estado = {};   // mes -> id -> fila
+    em.forEach(r => {
+      const m = String(r.mes || '').substring(0, 7);
+      (estado[m] = estado[m] || {})[String(r.id_sede || '').trim()] = r;
+    });
+    function mesMasQA_(c, k) {
+      const t = Number(c.substring(0, 4)) * 12 + (Number(c.substring(5, 7)) - 1) + k;
+      return String(Math.floor(t / 12)).padStart(4, '0') + '-' +
+        String(t % 12 + 1).padStart(2, '0');
+    }
+    const hoyMes = hoyISO_().substring(0, 7);
+
+    [
+      { mapa: mExAuto, id: 'exitosas_auto', conMonto: false,
+        cond: r => (Number(r.apps_acum) || 0) >= 3 || (Number(r.des_acum) || 0) >= 1 },
+      { mapa: mDesAuto, id: 'desembolsos_auto', conMonto: true,
+        cond: r => (Number(r.des_acum) || 0) >= 1 }
+    ].forEach(({ mapa, id, conMonto, cond }) => {
+      if (!mapa) return;
+      (mapa.filas || []).forEach(fila => {
+        const ids = porCosechaAuto[fila.cosecha] || [];
         checks++;
-        const suma = c + rA.celdas[k];
-        if (suma !== rN.cruzables) {
-          fail('f2.nuncavivas[' + rN.cosecha + '].M' + k,
-            'nuncavivas + activas != cruzables', suma + ' != ' + rN.cruzables);
+        if (fila.cruzables !== ids.length) {
+          fail('f2.' + id + '[' + fila.cosecha + ']',
+            'cruzables no coincide con el recalculo independiente (Autogestionados)',
+            fila.cruzables + ' vs ' + ids.length);
         }
+        (fila.celdas || []).forEach((c, k) => {
+          if (c === null || c === undefined) return;
+          const m = mesMasQA_(fila.cosecha, k);
+          if (!m || m > hoyMes) return;
+          const idx = estado[m] || {};
+          let n = 0, monto = 0;
+          ids.forEach(iid => {
+            const r = idx[iid];
+            if (!r) return;
+            if (cond(r)) n++;
+            if (conMonto) monto += Number(r.monto_acum) || 0;
+          });
+          checks++;
+          if (n !== c) {
+            fail('f2.' + id + '[' + fila.cosecha + '].M' + k,
+              'celda no cuadra con el recalculo independiente', c + ' vs ' + n);
+          }
+          if (conMonto) {
+            const extra = (fila.extras || [])[k] || 0;
+            checks++;
+            if (!casi(extra, monto, 1)) {
+              fail('f2.' + id + '[' + fila.cosecha + '].M' + k + '.monto',
+                'plata no cuadra con el recalculo independiente', extra + ' vs ' + monto);
+            }
+          }
+        });
       });
     });
   }
@@ -1277,7 +1337,7 @@ rangos.forEach(([ini, fin, etqR]) => {
       chequearMeta(ctx, d);
       chequearF1(ctx, d);
       chequearMetasCanal(ctx, d, orig, rol);
-      chequearF2(ctx, d);
+      chequearF2(ctx, d, orig, rol);
       chequearF4(ctx, d, orig, rol);
       chequearF4MetaRango(ctx, d, orig, rol);
       chequearF7(ctx, d);

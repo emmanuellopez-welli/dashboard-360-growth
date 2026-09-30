@@ -1847,6 +1847,31 @@ function armarF2_(R, ev, cfg, U, comparar) {
       }))
     : null;
 
+  // Pedido 30-sep-2026: dos mapas nuevos ("exitosas" y "desembolsos", pero
+  // solo con las sedes que HOY viven en el pipeline Autogestionados de
+  // HubSpot) en vez del mapa "Sedes que nunca han hecho nada", que se
+  // borro. Es una foto del pipeline ACTUAL, no de la cosecha de entrada --
+  // una sede puede salir de esta tabla si se movio a Farmer o se
+  // deshabilito despues de haber sido exitosa. Se filtra la MISMA
+  // agrupacion por cosecha de entrada (cos/cosB), quedandose solo con los
+  // id_internal que hoy tienen pipeline === 'Autogestionados' -- asi nunca
+  // se desincroniza de la cosecha real, solo angosta la poblacion.
+  var idsAutoget_ = {};
+  (U.base || []).forEach(function (s) {
+    var iid = String(s.id_internal || '').trim();
+    if (iid && String(s.pipeline || '').trim() === 'Autogestionados') idsAutoget_[iid] = true;
+  });
+  function filtrarCosechaPorIds_(cosSet, idsPermitidos) {
+    var out = {};
+    Object.keys(cosSet).forEach(function (c) {
+      var idsF = cosSet[c].ids.filter(function (id) { return idsPermitidos[id]; });
+      out[c] = { cosecha: c, ids: idsF, total: idsF.length, sinId: 0 };
+    });
+    return out;
+  }
+  var cosAuto = filtrarCosechaPorIds_(cos, idsAutoget_);
+  var cosBAuto = cosB ? filtrarCosechaPorIds_(cosB, idsAutoget_) : null;
+
   // ---- Estado de cada sede al cierre de cada mes --------------------
   var em = leerHoja_('SEDE_ESTADO_MES');
   var estado = {};                    // mes -> id -> fila
@@ -1974,39 +1999,6 @@ function armarF2_(R, ev, cfg, U, comparar) {
     });
   };
 
-/* El complemento EXACTO del mapa de "activas": de las sedes cruzables de la
-   cosecha (con id_internal, las unicas que se pueden medir contra
-   SEDE_ESTADO_MES), cuantas siguen en CERO solicitudes a ese mes. Se deriva
-   restando "activas" de "cruzables" celda por celda -- no hace falta una
-   query nueva, y no puede desincronizarse del mapa de activas porque nace
-   de el.
-
-   Pedido 16/17-sep-2026, a raiz de reconciliar contra la query de la jefa
-   de Emmanuel: su bucket "Muerto" mezclaba dos poblaciones -- sedes que
-   aplicaron y llevan 90+ dias sin volver (nuestra "muerta") Y sedes que
-   NUNCA aplicaron y ya son viejas (algo que el tablero no mostraba en
-   ningun mapa de cosecha). "Nunca vivas" es esa segunda poblacion,
-   aislada: nunca cruzo la puerta ni una vez.
-
-   El denominador NO es la cosecha completa (b.n): las sedes SIN
-   id_internal no tienen como cruzarse contra SEDE_ESTADO_MES, asi que no
-   se puede saber si aplicaron o no -- se excluyen del % (mismo patron que
-   el mapa de traspaso a CS, que divide por "las que entraron a CS" y no
-   por la cosecha completa). */
-function nuncaVivas_(filasActivas) {
-  return filasActivas.map(function (r) {
-    var celdas = r.celdas.map(function (c) {
-      return (c === null || c === undefined) ? null : r.cruzables - c;
-    });
-    // extras tiene que ser un ARREGLO (de nulls), no null a secas:
-    // promedio_ hace r.extras[k] sin chequear que exista.
-    var extras = celdas.map(function () { return null; });
-    return { cosecha: r.cosecha, n: r.n, sinId: r.sinId,
-             cruzables: r.cruzables, celdas: celdas, extras: extras,
-             nBase: r.cruzables };
-  });
-}
-
 /* Deriva el mapa "sin acumular" del acumulado: MISMAS sedes por celda (para
    que los dos mapas se hablen restando columnas), pero la plata sí es solo
    la de ese mes puntual. Pedido de Emmanuel 24-sep-2026: antes 'sedes' de
@@ -2049,10 +2041,14 @@ function mapasDe_(cosSet) {
 }
 var A = mapasDe_(cos);
 var B = cosB ? mapasDe_(cosB) : null;
-// nuncavivas no sale de mapasDe_ (es un complemento derivado de activas,
-// no un MEDIR nuevo) -- se agrega aca para que el grupo B del comparador
-// tambien lo tenga, igual que los demas mapas.
-if (B) B.nuncavivas = nuncaVivas_(B.activas);
+// exitosas_auto/desembolsos_auto no salen de mapasDe_ (corren sobre
+// cosAuto/cosBAuto, no sobre cos/cosB) -- se agregan aca para que el grupo
+// B del comparador tambien los tenga, igual que los demas mapas (el loop
+// generico de mas abajo busca B[m.id] por nombre).
+if (B) {
+  B.exitosas_auto = mapa_(MEDIR.exitosas, cosBAuto);
+  B.desembolsos_auto = mapa_(MEDIR.desembolsos, cosBAuto);
+}
 
 /** Titular de un mapa: la ultima celda cerrada de la cosecha mas madura
       con al menos 20 sedes, para no titular con una muestra de 3. */
@@ -2224,22 +2220,34 @@ if (B) B.nuncavivas = nuncaVivas_(B.activas);
       formato: 'num', clase: 'muerte', escala: '% de la cosecha muerta',
       colN: 'Sedes', pctCelda: true, filas: A['muertas'], ultimo: ultimo_(A['muertas']) },
 
-    // Pedido 16/17-sep-2026: aisla la poblacion que "muertas" NUNCA
-    // incluyo -- sedes que jamas radicaron ni una sola solicitud. Se
-    // encontro reconciliando contra una query externa cuyo bucket
-    // "Muerto" mezclaba esta poblacion con la de "muertas" de arriba.
-    { id: 'nuncavivas', orden: 8,
-      titulo: 'Sedes que nunca han hecho nada',
-      pregunta: '¿Cuántas de la cosecha jamás llegaron a radicar ni una sola solicitud?',
-      sub: 'Es lo contrario de "Sedes activas": empieza alta y BAJA con el tiempo, ' +
-        'a medida que algunas por fin radican su primera solicitud. No es lo ' +
-        'mismo que "muertas" — una sede muerta sí llegó a probar el producto ' +
-        'y dejó de volver; esta nunca llegó a probarlo.',
-      def: 'nunca viva = cero solicitudes de crédito hasta ese mes',
-      nBaseEtq: 'con id_internal (cruzables)',
-      formato: 'num', clase: 'muerte', escala: '% de la cosecha que nunca ha aplicado',
-      colN: 'Sedes', pctCelda: true, filas: nuncaVivas_(A['activas']),
-      ultimo: ultimo_(nuncaVivas_(A['activas'])) }
+    // Pedido 30-sep-2026: reemplaza al mapa "Sedes que nunca han hecho
+    // nada" (borrado a pedido de Emmanuel). Mismos dos criterios de
+    // "exitosas" y "desembolsos" (2 y 3), pero solo sobre la sede que HOY
+    // esta en el pipeline Autogestionados de HubSpot -- ver el comentario
+    // de idsAutoget_/cosAuto mas arriba para el porque.
+    { id: 'exitosas_auto', orden: 8,
+      titulo: 'Sedes exitosas · Autogestionados',
+      pregunta: '¿Cuántas de las que hoy están en Autogestionados pasaron a usar el sistema?',
+      sub: 'Mismo criterio que "Sedes exitosas" (2), pero solo sobre las sedes ' +
+        'que HOY viven en el pipeline Autogestionados de HubSpot -- es una ' +
+        'foto del pipeline actual, no de la cosecha de entrada, así que una ' +
+        'sede puede salir de esta tabla si después se movió a Farmer o se ' +
+        'deshabilitó, aunque ya haya sido exitosa.',
+      def: 'exitosa = 3 o más solicitudes, o al menos 1 desembolso',
+      formato: 'num', clase: 'acum', escala: '% de esas sedes ya exitosa',
+      colN: 'Sedes', pctCelda: true, filas: mapa_(MEDIR.exitosas, cosAuto),
+      ultimo: ultimo_(mapa_(MEDIR.exitosas, cosAuto)) },
+
+    { id: 'desembolsos_auto', orden: 9,
+      titulo: 'Sedes que desembolsan · Autogestionados (acumulado)',
+      pregunta: '¿Cuántas de las que hoy están en Autogestionados ya desembolsaron, y cuánto?',
+      sub: 'Mismo criterio que "Sedes que desembolsan · acumulado" (3), restringido ' +
+        'a las sedes que HOY están en el pipeline Autogestionados.',
+      def: 'desembolsa = al menos 1 crédito desembolsado; monto = plata acumulada',
+      formato: 'num', clase: 'acum', escala: '% de esas sedes que ya desembolsó',
+      colN: 'Sedes', pctCelda: true, conMonto: true,
+      filas: mapa_(MEDIR.desembolsos, cosAuto),
+      ultimo: ultimo_(mapa_(MEDIR.desembolsos, cosAuto)) }
   ];
 
   // A cada mapa se le cuelga su promedio y, si hay comparacion, las filas del
